@@ -36,32 +36,40 @@
 
 ## openarm 操作
 ### 零位校正
-lerobot-calibrate \
---robot.type=openarm_follower \
---robot.port=can0 \
---robot.side=right \
---robot.id=my_openarm_follower
-
-### 遠端操作
-1. lerobot-teleoperate \
+- leader arm:
+  - lerobot-calibrate \
+      --teleop.type=openarm_leader \
+      --teleop.port=can2 \
+      --teleop.id=my_openarm_leader
+- follow arm:
+  - lerobot-calibrate \
     --robot.type=openarm_follower \
     --robot.port=can0 \
     --robot.side=right \
-    --robot.id=my_follower \
-    --teleop.type=openarm_leader \
-    --teleop.port=can1 \
-    --teleop.id=my_leader
-2. lerobot-teleoperate \
-    --robot.type=bi_openarm_follower \
-    --robot.left_arm_config.port=can0 \
-    --robot.left_arm_config.side=left \
-    --robot.right_arm_config.port=can1 \
-    --robot.right_arm_config.side=right \
-    --robot.id=my_bimanual_follower \
-    --teleop.type=bi_openarm_leader \
-    --teleop.left_arm_config.port=can2 \
-    --teleop.right_arm_config.port=can3 \
-    --teleop.id=my_bimanual_leader
+    --robot.id=my_openarm_follower
+
+### 遠端操作
+- unimanual:
+  - lerobot-teleoperate \
+      --robot.type=openarm_follower \
+      --robot.port=can0 \
+      --robot.side=right \
+      --robot.id=my_follower \
+      --teleop.type=openarm_leader \
+      --teleop.port=can2 \
+      --teleop.id=my_leader
+- bimanual:
+  - lerobot-teleoperate \
+      --robot.type=bi_openarm_follower \
+      --robot.left_arm_config.port=can0 \
+      --robot.left_arm_config.side=left \
+      --robot.right_arm_config.port=can1 \
+      --robot.right_arm_config.side=right \
+      --robot.id=my_bimanual_follower \
+      --teleop.type=bi_openarm_leader \
+      --teleop.left_arm_config.port=can2 \
+      --teleop.right_arm_config.port=can3 \
+      --teleop.id=my_bimanual_leader
 
 ### 資料錄製
 lerobot-record \
