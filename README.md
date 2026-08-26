@@ -1,16 +1,16 @@
 # git rule
 ## 正確的解決步驟：使用 upstream 機制
   請不要刪除原專案的 .git，並在終端機依序執行以下指令：
-    保留原版連結：將原作者的儲存庫重新命名為 upstream（上游）。
-    指令：
+  保留原版連結：將原作者的儲存庫重新命名為 upstream（上游）。
+  - 指令：
     - git remote add upstream https://github.com/huggingface/lerobot
     - git remote -v
-    加入自己連結：將你在 GitHub 新建的儲存庫設為新的 origin。
-    指令：
+  加入自己連結：將你在 GitHub 新建的儲存庫設為新的 origin。
+  - 指令：
     - git remote add origin <你自己的新儲存庫網址>
     - git remote -v
-    推送至你自己的 repo：將目前的程式碼推送到你自己的儲存庫。
-    指令：
+  推送至你自己的 repo：將目前的程式碼推送到你自己的儲存庫。
+  - 指令：
     - git push -u origin main（若預設分支為 master 則改為 master）
 
 ## 日後如何同步原作者的更新？
@@ -42,8 +42,7 @@ lerobot-calibrate \
     --teleop.id=my_openarm_leader
 
 ### 遠端操作
-1. 
-lerobot-teleoperate \
+1. lerobot-teleoperate \
     --robot.type=openarm_follower \
     --robot.port=can0 \
     --robot.side=right \
@@ -51,8 +50,7 @@ lerobot-teleoperate \
     --teleop.type=openarm_leader \
     --teleop.port=can1 \
     --teleop.id=my_leader
-2. 
-lerobot-teleoperate \
+2. lerobot-teleoperate \
     --robot.type=bi_openarm_follower \
     --robot.left_arm_config.port=can0 \
     --robot.left_arm_config.side=left \
@@ -86,7 +84,7 @@ lerobot-record \
   4. cd lerobot
   5. uv pip install -e .
   6. uv pip install 
-  7. uv pip install 'lerobot[all]'  
-  ![KEY]
-  如果遇到建置錯誤，您可能需要安裝額外的依賴項目：cmake、build-essential 和 ffmpeg libs。在 Linux 上安裝這些項目，請執行:
-  sudo apt-get install cmake build-essential python3-dev pkg-config libavformat-dev libavcodec-dev libavdevice-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev
+  7. uv pip install 'lerobot[all]'
+  > [!NOTE]
+  > 如果遇到建置錯誤，您可能需要安裝額外的依賴項目：cmake、build-essential 和 ffmpeg libs。在 Linux 上安裝這些項目，請執行:
+  > sudo apt-get install cmake build-essential python3-dev pkg-config libavformat-dev libavcodec-dev libavdevice-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev
