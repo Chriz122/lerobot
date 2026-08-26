@@ -11,7 +11,6 @@
     - git remote -v
     推送至你自己的 repo：將目前的程式碼推送到你自己的儲存庫。
     指令：
-    - git push -u origin main
     - git push -u origin main（若預設分支為 master 則改為 master）
 
 ## 日後如何同步原作者的更新？
