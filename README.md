@@ -37,9 +37,10 @@
 ## openarm 操作
 ### 零位校正
 lerobot-calibrate \
-    --teleop.type=openarm_leader \
-    --teleop.port=can1 \
-    --teleop.id=my_openarm_leader
+--robot.type=openarm_follower \
+--robot.port=can0 \
+--robot.side=right \
+--robot.id=my_openarm_follower
 
 ### 遠端操作
 1. lerobot-teleoperate \
