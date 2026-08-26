@@ -92,8 +92,7 @@ lerobot-record \
   3. source bin/activate
   4. cd lerobot
   5. uv pip install -e .
-  6. uv pip install 
-  7. uv pip install 'lerobot[all]'
+  6. uv pip install 'lerobot[all]'
   > [!NOTE]
   > 如果遇到建置錯誤，您可能需要安裝額外的依賴項目：cmake、build-essential 和 ffmpeg libs。在 Linux 上安裝這些項目，請執行:
   > sudo apt-get install cmake build-essential python3-dev pkg-config libavformat-dev libavcodec-dev libavdevice-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev
