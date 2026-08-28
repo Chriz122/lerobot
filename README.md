@@ -20,7 +20,7 @@
   - 合併原版進度：git merge upstream/main
   - 同步至你的 repo：git push origin main
 
-# OPENARM
+# OPENARM + D435I
 ## 啟用虛擬環境 
 - source bin/activate
 
@@ -33,6 +33,9 @@
 
 ## 測試電機通訊
 - lerobot-setup-can --mode=test --interfaces=can0,can1
+
+## 測試 D435I
+- lerobot-find-cameras realsense
 
 ## openarm 操作
 ### 零位校正
@@ -81,8 +84,15 @@ lerobot-record \
     --teleop.port=can1 \
     --teleop.id=my_leader \
     --repo-id=my_hf_username/my_openarm_dataset \
+    --robot.cameras="{ \
+      front: {type: intelrealsense, index_or_path: 0, width: 640, height: 480, fps: 30}, \
+    }" \
     --fps=30 \
     --num-episodes=10
+    --display_data=true \
+
+> [!NOTE]
+> ACT: --num-episodes=50 ~ 100
 
 # 安裝
 ## uv:

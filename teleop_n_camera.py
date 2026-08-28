@@ -3,10 +3,10 @@ import cv2
 import numpy as np
 import pyrealsense2 as rs
 
-from lerobot.src.lerobot.robots.bi_openarm_follower import BiOpenArmFollower, BiOpenArmFollowerConfig
-from lerobot.src.lerobot.teleoperators.bi_openarm_leader import BiOpenArmLeader, BiOpenArmLeaderConfig
-from lerobot.src.lerobot.robots.openarm_follower import OpenArmFollowerConfig
-from lerobot.src.lerobot.teleoperators.openarm_leader import OpenArmLeaderConfig
+from .lerobot.src.lerobot.robots.bi_openarm_follower import BiOpenArmFollower, BiOpenArmFollowerConfig
+from .lerobot.src.lerobot.teleoperators.bi_openarm_leader import BiOpenArmLeader, BiOpenArmLeaderConfig
+from .lerobot.src.lerobot.robots.openarm_follower import OpenArmFollowerConfig
+from .lerobot.src.lerobot.teleoperators.openarm_leader import OpenArmLeaderConfig
 
 # ==========================================
 # 1. 初始化 Intel RealSense D435i 相機管線
