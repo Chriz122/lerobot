@@ -88,8 +88,8 @@ lerobot-record \
       front: {type: intelrealsense, index_or_path: 0, width: 640, height: 480, fps: 30}, \
     }" \
     --fps=30 \
-    --num-episodes=10
-    --display_data=true \
+    --num-episodes=10 \
+    --display_data=true
 
 > [!NOTE]
 > ACT: --num-episodes=50 ~ 100
