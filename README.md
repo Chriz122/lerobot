@@ -76,19 +76,22 @@
 
 ### 資料錄製
 lerobot-record \
-    --robot.type=openarm_follower \
-    --robot.port=can0 \
-    --robot.side=right \
-    --robot.id=my_follower \
-    --teleop.type=openarm_leader \
-    --teleop.port=can1 \
-    --teleop.id=my_leader \
-    --repo-id=my_hf_username/my_openarm_dataset \
+    --robot.type=bi_openarm_follower \
+    --robot.left_arm_config.port=can2 \
+    --robot.left_arm_config.side=left \
+    --robot.right_arm_config.port=can3 \
+    --robot.right_arm_config.side=right \
+    --robot.id=my_bimanual_follower \
+    --teleop.type=bi_openarm_leader \
+    --teleop.left_arm_config.port=can0 \
+    --teleop.right_arm_config.port=can1 \
+    --teleop.id=my_bimanual_leader \
+    --dataset.repo_id=my_hf_username/my_openarm_dataset \
+    --dataset.fps=30 \
+    --dataset.num_episodes=3 \
     --robot.cameras="{ \
-      front: {type: intelrealsense, index_or_path: 0, width: 640, height: 480, fps: 30}, \
+      front: {type: intelrealsense, serial_number_or_name: '243522072201', width: 640, height: 480, fps: 30}, \
     }" \
-    --fps=30 \
-    --num-episodes=10 \
     --display_data=true
 
 > [!NOTE]
