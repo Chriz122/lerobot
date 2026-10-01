@@ -1,0 +1,40 @@
+{
+  "waypoints": [
+    {
+      "left_joint_1.pos": 65.0,
+      "left_joint_2.pos": 0.62,
+      "left_joint_3.pos": -10.2,
+      "left_joint_4.pos": 55.51,
+      "left_joint_5.pos": 2.11,
+      "left_joint_6.pos": -1.1,
+      "left_joint_7.pos": 0.0,
+      "left_gripper.pos": -2.33,
+      "right_joint_1.pos": -65.0,
+      "right_joint_2.pos": -1.13,
+      "right_joint_3.pos": 6.48,
+      "right_joint_4.pos": 58.33,
+      "right_joint_5.pos": -6.04,
+      "right_joint_6.pos": 2.72,
+      "right_joint_7.pos": 0.0,
+      "right_gripper.pos": -4.97
+    },
+    {
+      "left_joint_1.pos": 62.72,
+      "left_joint_2.pos": -24.14,
+      "left_joint_3.pos": -8.91,
+      "left_joint_4.pos": 105.43,
+      "left_joint_5.pos": -7.33,
+      "left_joint_6.pos": -12.19,
+      "left_joint_7.pos": -9.43,
+      "left_gripper.pos": -2.35,
+      "right_joint_1.pos": -61.63,
+      "right_joint_2.pos": 27.66,
+      "right_joint_3.pos": 4.86,
+      "right_joint_4.pos": 108.62,
+      "right_joint_5.pos": 8.58,
+      "right_joint_6.pos": 5.93,
+      "right_joint_7.pos": -7.33,
+      "right_gripper.pos": -1.52
+    }
+  ]
+}
