@@ -360,14 +360,14 @@ class RobstrideMotorsBus(MotorsBusBase):
             self._switch_operation_mode(motor, mode)
             time.sleep(0.01)
 
-    def _enable_motor(self, motor: NameOrID) -> None:
+    def _enable_motor(self, motor: NameOrID) -> bool:
         """Enable a single motor."""
         motor_id = self._get_motor_id(motor)
         recv_id = self._get_motor_recv_id(motor)
         data = [0xFF] * 7 + [CAN_CMD_ENABLE]
         msg = can.Message(arbitration_id=motor_id, data=data, is_extended_id=False)
         self._bus().send(msg)
-        self._recv_motor_response(expected_recv_id=recv_id, timeout=PARAM_TIMEOUT)
+        return self._recv_motor_response(expected_recv_id=recv_id, timeout=PARAM_TIMEOUT) is not None
 
     def _disable_motor(self, motor: NameOrID) -> None:
         """Disable a single motor."""
@@ -385,7 +385,8 @@ class RobstrideMotorsBus(MotorsBusBase):
             for _ in range(num_retry + 1):
                 try:
                     self._get_motor_name(motor)
-                    self._enable_motor(self._get_motor_name(motor))
+                    if not self._enable_motor(self._get_motor_name(motor)):
+                        raise ConnectionError(f"No response from {self._get_motor_name(motor)} while enabling torque")
                     break
                 except Exception as e:
                     if _ == num_retry:

@@ -275,7 +275,7 @@ class DamiaoMotorsBus(MotorsBusBase):
             self._send_simple_command(motor, CAN_CMD_ENABLE)
             time.sleep(MEDIUM_TIMEOUT_SEC)
 
-    def _send_simple_command(self, motor: NameOrID, command_byte: int) -> None:
+    def _send_simple_command(self, motor: NameOrID, command_byte: int) -> bool:
         """Helper to send simple 8-byte commands (Enable, Disable, Zero)."""
         motor_id = self._get_motor_id(motor)
         motor_name = self._get_motor_name(motor)
@@ -289,8 +289,10 @@ class DamiaoMotorsBus(MotorsBusBase):
         self.canbus.send(msg)
         if msg := self._recv_motor_response(expected_recv_id=recv_id):
             self._process_response(motor_name, msg)
+            return True
         else:
             logger.debug(f"No response from {motor_name} after command 0x{command_byte:02X}")
+            return False
 
     def enable_torque(self, motors: str | list[str] | None = None, num_retry: int = 0) -> None:
         """Enable torque on selected motors."""
@@ -298,7 +300,8 @@ class DamiaoMotorsBus(MotorsBusBase):
         for motor in target_motors:
             for _ in range(num_retry + 1):
                 try:
-                    self._send_simple_command(motor, CAN_CMD_ENABLE)
+                    if not self._send_simple_command(motor, CAN_CMD_ENABLE):
+                        raise ConnectionError(f"No response from {self._get_motor_name(motor)} while enabling torque")
                     break
                 except Exception as e:
                     if _ == num_retry:
