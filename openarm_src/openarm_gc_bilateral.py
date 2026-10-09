@@ -29,7 +29,7 @@ Gravity compensation for OpenArm leader arms + home pose before every episode.
 
 環境變數 / Env vars
   OPENARM_URDF        (必填) bimanual URDF 路徑，關節名 openarm_{left,right}_joint1..7
-  OPENARM_HOME        home.json 路徑；不設則不做 homing
+  OPENARM_HOME        reset.json 路徑；不設則使用 openarm_src/reset.json
   OPENARM_HOME_TIME   移到 home 的時間 (秒)，預設 4
   OPENARM_TABLE_Z     (選填) 桌面高度 (URDF 世界座標, m)，設了會在 homing 前檢查碰桌
   OPENARM_TABLE_MARGIN 碰桌檢查的安全餘裕 (m)，預設 0.05
@@ -42,23 +42,41 @@ Gravity compensation for OpenArm leader arms + home pose before every episode.
   OPENARM_CONTROL_HZ  重力補償迴圈頻率，預設 200
   OPENARM_GC_SCALE    重力補償整體倍率，預設 1.0 (第一次測試建議 0.5)
   # ---force_feedback--------------------------------------------------------
-  OPENARM_FF_SCALE    follower 力回饋倍率，預設 0 (關閉)；建議從 0.1 開始
+  OPENARM_FF_SCALE    follower 夾爪力回饋倍率，預設 1.0；設 0 關閉
   OPENARM_FF_SIGN     力回饋方向，預設 1；若手感方向相反設 -1
-  OPENARM_FF_LIMIT    每關節力回饋上限 (Nm)，預設 2.0
-  OPENARM_FF_ALPHA    力回饋低通係數 (0..1)，預設 0.1；越小越穩定
-  OPENARM_FF_DEADBAND 力回饋死區 (Nm)，預設 0.1
+  OPENARM_FF_LIMIT    每關節力回饋上限 (Nm)，預設 8.0
+  OPENARM_FF_ALPHA    力回饋低通係數 (0.3)，預設 0.3；越小越穩定
+  OPENARM_FF_DEADBAND 力回饋死區 (Nm)，預設 0.02
   # -------------------------------------------------------------------------
   OPENARM_LEADER_SIDE 單臂 openarm_leader 時指定 left / right
   OPENARM_GC_STATS    1 (預設) = 每 5 秒印出重力補償迴圈實際頻率 / CAN 通訊時間；0 = 關閉
   OPENARM_PROFILE     1 (預設) = record 時每 5 秒印出主迴圈各步驟耗時；0 = 關閉
+
+  --- CAN 管理 / 安全關閉 ---
+  OPENARM_CAN_SETUP   1 (預設) = 開始前自動 lerobot-setup-can 打開介面，並測試到所有馬達都回應為止；0 = 不管
+  OPENARM_CAN_IFACES  要管理的介面，預設 can0,can1,can2,can3
+  OPENARM_CAN_DOWN    0 (預設) = 結束後保持介面 UP；1 = 所有手臂都關完力矩後才把介面關掉
+  OPENARM_DISABLE_RETRY  關力矩時每支手臂重送 disable 的次數，預設 3
+  OPENARM_ENABLE_RETRY   開力矩時每顆馬達重送 enable 的次數，預設 3；無回覆會中止啟動
+
+結束時的保證 / Shutdown guarantees
+  1. leader / follower 先慢慢回下垂（與原本相同）
+  2. 每支手臂「各自」關閉：一支出錯不會讓另一支被跳過
+  3. disable 指令重送多次（CAN 偶爾掉 frame，避免某顆馬達一直亮綠燈）
+  4. 不論正常結束、Ctrl+C、程式出錯，最後都會再檢查一次：還連著的手臂一律送 disable
+  5. 若 OPENARM_CAN_DOWN=1，關介面一定排在 1–4 之後
 """
 
 from __future__ import annotations
 
 import inspect
+import atexit
 import json
 import logging
 import os
+import re
+import signal
+import subprocess
 import sys
 import threading
 import time
@@ -101,6 +119,138 @@ TAU_LIMIT = [18.0, 18.0, 8.0, 8.0, 2.5, 2.5, 2.5]
 
 CONTROL_HZ = 200.0
 STATS_PERIOD = 5.0  # 秒
+
+
+DISABLE_RETRY = int(os.environ.get("OPENARM_DISABLE_RETRY", "3"))
+ENABLE_RETRY = max(int(os.environ.get("OPENARM_ENABLE_RETRY", "3")), 1)
+# 力回饋參數
+DEFAULT_FORCE_FEEDBACK_SCALE = 0.05
+DEFAULT_FORCE_FEEDBACK_LIMIT = 0.2
+DEFAULT_FORCE_FEEDBACK_ALPHA = 0.6
+DEFAULT_FORCE_FEEDBACK_DEADBAND = 0.02
+
+
+def _default_home_path() -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "reset.json")
+
+
+def _resolve_home_path() -> str:
+    path = os.environ.get("OPENARM_HOME") or _default_home_path()
+    path = os.path.abspath(os.path.expanduser(path))
+    if not os.path.isfile(path):
+        raise FileNotFoundError(
+            f"[gc] home pose file not found: {path}. "
+            "Create openarm_src/reset.json or set OPENARM_HOME=/path/to/reset.json."
+        )
+    return path
+
+# ----------------------------------------------------------------------------
+# 連線中的手臂清單 + 安全關力矩 / registry of connected arms + safe torque-off
+# ----------------------------------------------------------------------------
+_CONNECTED: list = []  # 每支 OpenArmLeader / OpenArmFollower 連上後加入，關閉後移除
+_FINALIZED = False
+
+
+def _register(arm):
+    if arm not in _CONNECTED:
+        _CONNECTED.append(arm)
+
+
+def _unregister(arm):
+    if arm in _CONNECTED:
+        _CONNECTED.remove(arm)
+
+
+def _bus_connected(arm) -> bool:
+    try:
+        return bool(arm.bus.is_connected)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def safe_disable(arm, label: str = ""):
+    """對一支手臂重送 disable 數次；失敗只記錄，不往外丟例外。"""
+    if not _bus_connected(arm):
+        return
+    for i in range(DISABLE_RETRY):
+        try:
+            arm.bus.disable_torque()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[safe] {label or arm}: disable_torque 第 {i + 1} 次失敗 ({e})")
+        time.sleep(0.05)
+
+
+def final_safety_net():
+    """最後一道保險：任何還連著的手臂都關力矩。正常、Ctrl+C、出錯都會跑。"""
+    global _FINALIZED
+    if _FINALIZED:
+        return
+    _FINALIZED = True
+    left = [a for a in list(_CONNECTED) if _bus_connected(a)]
+    if left:
+        logger.warning(f"[safe] 結束時仍有 {len(left)} 支手臂沒被正常關閉 -> 現在補關（先回下垂再關力矩）")
+    for arm in left:
+        try:
+            arm.disconnect()  # 已被 patch：會先回下垂、停執行緒、重送 disable
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[safe] {arm}: 正常關閉失敗 ({e}) -> 直接關力矩，請扶好手臂")
+            gc = getattr(arm, "_gc", None)
+            if gc is not None:
+                gc.stop()
+            safe_disable(arm)
+        _unregister(arm)
+
+
+# ----------------------------------------------------------------------------
+# CAN 介面管理 / CAN interface management
+# ----------------------------------------------------------------------------
+def _can_ifaces() -> list[str]:
+    return [x.strip() for x in os.environ.get("OPENARM_CAN_IFACES", "can0,can1,can2,can3").split(",") if x.strip()]
+
+
+def can_setup_and_check(max_tries: int = 3):
+    """打開 CAN 介面，並反覆測試直到每條 bus 的 8 顆馬達都回應。
+    介面剛打開時第一個訊息常會掉 (看起來像 joint_1 沒回應)，所以第一次 test 當暖機。"""
+    if os.environ.get("OPENARM_CAN_SETUP", "1") == "0":
+        return
+    ifaces = _can_ifaces()
+    arg = "--interfaces=" + ",".join(ifaces)
+    r = subprocess.run(["lerobot-setup-can", "--mode=setup", arg], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(r.stdout + r.stderr)
+        sys.exit("[can] lerobot-setup-can setup 失敗，請檢查 USB-CAN 轉接器")
+    logger.info(f"[can] {','.join(ifaces)} UP")
+    expected = 8 * len(ifaces)
+    for t in range(1, max_tries + 1):
+        out = subprocess.run(["lerobot-setup-can", "--mode=test", arg], capture_output=True, text=True).stdout
+        m = re.search(r"Total motors found:\s*(\d+)", out)
+        found = int(m.group(1)) if m else 0
+        if found >= expected:
+            logger.info(f"[can] 馬達測試通過：{found}/{expected}（第 {t} 次）")
+            return
+        missing, cur = [], "?"
+        for line in out.splitlines():
+            mi = re.match(r"\s*(can\d+):", line)
+            if mi:
+                cur = mi.group(1)
+            if "No response" in line:
+                mj = re.search(r"\((\w+)\)", line)
+                missing.append(f"{cur}/{mj.group(1) if mj else '?'}")
+        logger.info(f"[can] 第 {t} 次測試 {found}/{expected}，沒回應：{', '.join(missing)}")
+        time.sleep(0.3)
+    print(f"\n⚠ 測了 {max_tries} 次仍有馬達沒回應：{', '.join(missing)}")
+    print("  建議：檢查急停、24V 電源；或關掉 24V 等 10 秒再開。")
+    input("  按 Enter 仍要繼續，Ctrl+C 取消 ...")
+
+
+def can_teardown():
+    if os.environ.get("OPENARM_CAN_DOWN", "0") != "1":
+        return
+    for iface in _can_ifaces():
+        r = subprocess.run(["ip", "link", "set", iface, "down"], capture_output=True, text=True)
+        if r.returncode != 0:
+            r = subprocess.run(["sudo", "-n", "ip", "link", "set", iface, "down"], capture_output=True, text=True)
+        logger.info(f"[can] {iface} down" + ("" if r.returncode == 0 else f" 失敗：{r.stderr.strip()}"))
 
 
 # ----------------------------------------------------------------------------
@@ -159,11 +309,13 @@ class LeaderGC:
         self.fric_scale = float(os.environ.get("OPENARM_FRICTION_SCALE", "0.0"))
         self.fric_eps = float(os.environ.get("OPENARM_FRICTION_EPS", str(FRICTION_VEL_EPS)))
         # ---force_feedback--------------------------------------------------------
-        self.ff_scale = float(os.environ.get("OPENARM_FF_SCALE", "0.0"))
-        self.ff_sign = float(os.environ.get("OPENARM_FF_SIGN", "1.0"))
-        self.ff_limit = abs(float(os.environ.get("OPENARM_FF_LIMIT", "2.0")))
-        self.ff_alpha = min(max(float(os.environ.get("OPENARM_FF_ALPHA", "0.1")), 0.0), 1.0)
-        self.ff_deadband = abs(float(os.environ.get("OPENARM_FF_DEADBAND", "0.1")))
+        self.ff_scale = float(os.environ.get("OPENARM_FF_SCALE", DEFAULT_FORCE_FEEDBACK_SCALE))
+        self.ff_sign = float(os.environ.get("OPENARM_FF_SIGN", "-1.0"))
+        self.ff_limit = abs(float(os.environ.get("OPENARM_FF_LIMIT", DEFAULT_FORCE_FEEDBACK_LIMIT)))
+        self.ff_alpha = min(
+            max(float(os.environ.get("OPENARM_FF_ALPHA", DEFAULT_FORCE_FEEDBACK_ALPHA)), 0.0), 1.0
+        )
+        self.ff_deadband = abs(float(os.environ.get("OPENARM_FF_DEADBAND", DEFAULT_FORCE_FEEDBACK_DEADBAND)))
         # --------------------------------------------------------------------------
         self.hz = float(os.environ.get("OPENARM_CONTROL_HZ", str(CONTROL_HZ)))
         self.stats_on = os.environ.get("OPENARM_GC_STATS", "1") != "0"
@@ -175,7 +327,10 @@ class LeaderGC:
         self.latest: dict[str, dict] = {}
         self.last_tau = np.zeros(7)
         # ---force_feedback--------------------------------------------------------
-        self.last_feedback_tau = np.zeros(7)
+        self.last_feedback_tau = 0.0
+        self.feedback_samples = 0
+        self.feedback_max = 0.0
+        self.external_max = 0.0
         # -------------------------------------------------------------------------
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -186,14 +341,41 @@ class LeaderGC:
         states = self.bus.sync_read_all_states()
         with self.lock:
             self.latest = {m: dict(s) for m, s in states.items()}
-        self.bus.enable_torque()
+        failed = []
+        for motor in self.bus.motors:
+            enabled = False
+            last_error = None
+            for attempt in range(1, ENABLE_RETRY + 1):
+                try:
+                    self.bus.enable_torque([motor])
+                    enabled = True
+                    break
+                except Exception as e:  # noqa: BLE001
+                    last_error = e
+                    logger.warning(
+                        f"[gc] {self.bus.port}/{motor}: enable torque 第 {attempt}/{ENABLE_RETRY} 次失敗 ({e})"
+                    )
+                    time.sleep(0.05)
+            if not enabled:
+                failed.append(f"{self.bus.port}/{motor}: {last_error}")
+
+        if failed:
+            try:
+                self.bus.disable_torque(num_retry=DISABLE_RETRY)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[gc] enable 失敗後關閉 torque 也失敗 ({e})")
+            raise ConnectionError("Torque enable failed: " + "; ".join(failed))
+
+        logger.info(f"[gc] torque enabled: {self.bus.port} ({len(self.bus.motors)} motors)")
         self._thread = threading.Thread(target=self._run, daemon=True, name=f"gc-{self.gm.side}")
         self._thread.start()
 
     def stop(self):
         self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=1.0)
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=3.0)
+            if self._thread.is_alive():
+                logger.warning(f"[gc] {self.bus.port}: 重力補償執行緒 3 秒內沒停，仍繼續關力矩")
 
     def set_target(self, target: dict[str, float] | None):
         with self.lock:
@@ -202,8 +384,22 @@ class LeaderGC:
     # ---force_feedback--------------------------------------------------------
     def set_feedback_source(self, follower) -> None:
         """Use a follower arm's measured motor torque for haptic feedback."""
+        try:
+            states = follower.bus.sync_read_all_states([GRIPPER])
+            missing = [m for m in (GRIPPER,) if m not in states or "torque" not in states[m]]
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[gc] %s: unable to read follower torque for force feedback: %s", self.gm.side, e)
+            return
+        if missing:
+            logger.warning(
+                "[gc] %s: force feedback unavailable; follower torque missing for %s",
+                self.gm.side,
+                ", ".join(missing),
+            )
+            return
         with self.lock:
             self.feedback_source = follower if self.ff_scale > 0 else None
+        logger.info("[gc] %s: follower gripper torque source bound", self.gm.side)
     # -------------------------------------------------------------------------
 
     def positions(self) -> dict[str, float]:
@@ -224,23 +420,24 @@ class LeaderGC:
             time.sleep(duration / n)
 
     # ---force_feedback--------------------------------------------------------
-    def _force_feedback(self, follower) -> np.ndarray:
+    def _force_feedback(self, follower) -> float:
         if follower is None or self.ff_scale <= 0:
-            return np.zeros(7)
+            return 0.0
 
         states = follower.bus._last_known_states
-        if any(m not in states for m in ARM_JOINTS):
-            return np.zeros(7)
-        q = np.array([states[m]["position"] for m in ARM_JOINTS], dtype=float)
-        measured = np.array([states[m]["torque"] for m in ARM_JOINTS], dtype=float)
-        if not np.all(np.isfinite(q)) or not np.all(np.isfinite(measured)):
-            return np.zeros(7)
+        state = states.get(GRIPPER)
+        if state is None or "torque" not in state:
+            return 0.0
 
-        # The gravity component is already applied by the leader controller.
-        external = measured - self.scale * np.array(JOINT_GC_SCALE) * self.gm.torque(q)
-        external[np.abs(external) < self.ff_deadband] = 0.0
-        feedback = self.ff_sign * self.ff_scale * external
-        return np.clip(feedback, -self.ff_limit, self.ff_limit)
+        measured = float(state["torque"])
+        if not np.isfinite(measured):
+            return 0.0
+
+        if abs(measured) < self.ff_deadband:
+            measured = 0.0
+        self.external_max = max(self.external_max, abs(measured))
+        feedback = self.ff_sign * self.ff_scale * measured
+        return float(np.clip(feedback, -self.ff_limit, self.ff_limit))
     # ------------------------------------------------------------------------
 
     # --- loop ---------------------------------------------------------------
@@ -270,9 +467,11 @@ class LeaderGC:
                     feedback_tau = self._force_feedback(feedback_source)
                     feedback_tau = (1.0 - self.ff_alpha) * self.last_feedback_tau + self.ff_alpha * feedback_tau
                 else:
-                    feedback_tau = np.zeros(7)
+                    feedback_tau = 0.0
                 self.last_feedback_tau = feedback_tau
-                tau = tau + feedback_tau
+                if feedback_tau != 0.0:
+                    self.feedback_samples += 1
+                    self.feedback_max = max(self.feedback_max, abs(feedback_tau))
                 # -------------------------------------------------------------------------
                 tau = np.clip(tau, -np.array(TAU_LIMIT), TAU_LIMIT)
                 self.last_tau = tau
@@ -288,7 +487,13 @@ class LeaderGC:
                         cmds[GRIPPER] = (GRIPPER_HOLD_KP, GRIPPER_HOLD_KD, float(target[GRIPPER]), 0.0, 0.0)
                     else:
                         g = cache[GRIPPER]["position"]
-                        cmds[GRIPPER] = (0.0, GRIPPER_KD * self.kd_scale, float(g), 0.0, 0.0)
+                        cmds[GRIPPER] = (
+                            0.0,
+                            GRIPPER_KD * self.kd_scale,
+                            float(g),
+                            0.0,
+                            float(np.clip(feedback_tau, -TAU_LIMIT[-1], TAU_LIMIT[-1])),
+                        )
 
                 t_bus = time.perf_counter()
                 self.bus._mit_control_batch(cmds)  # 回傳封包會更新 _last_known_states
@@ -317,6 +522,8 @@ class LeaderGC:
                             f"[gc-stats] {self.gm.side:5s} loop {st_n / (now - st_t0):5.0f} Hz (目標 {self.hz:.0f})"
                             f" | CAN 往返 avg {1e3 * st_bus_sum / st_n:5.2f} ms, max {1e3 * st_bus_max:5.2f} ms"
                             f" | 單次運算+通訊 max {1e3 * st_cyc_max:5.2f} ms | 超時 {st_over}/{st_n}"
+                            f" | FF raw {self.external_max:5.2f} Nm -> cmd {self.feedback_max:5.2f} Nm"
+                            f", samples {self.feedback_samples}"
                         )
                         st_t0, st_n, st_over = now, 0, 0
                         st_bus_sum, st_bus_max, st_cyc_max = 0.0, 0.0, 0.0
@@ -417,6 +624,7 @@ def install_patches():
         # 原本的 connect: 連線 -> (校正) -> disable torque -> set_zero_position
         # 注意：LeRobot 每次 connect 都會把「當下姿態」設為零點，所以啟動時 leader 必須自然下垂！
         orig_connect(self, calibrate)
+        _register(self)
         side = getattr(self, "_gc_side", None) or os.environ.get("OPENARM_LEADER_SIDE")
         self._gc = LeaderGC(self, side)
         self._gc.start()
@@ -440,16 +648,37 @@ def install_patches():
 
     def disconnect(self):
         gc = getattr(self, "_gc", None)
-        if gc is not None and gc.error is None:
-            # 先慢慢垂回零點 (重力中性姿態)，再關力矩，避免手臂直接摔下
-            logger.info(f"[gc] {self}: returning to hanging pose before disabling torque")
-            zero = {m: 0.0 for m in ARM_JOINTS}
-            gc.move_to(zero, 3.0)
-            time.sleep(0.3)
-            gc.stop()
-        orig_disconnect(self)
+        if gc is not None:
+            if gc.error is None:
+                # 先慢慢垂回零點 (重力中性姿態)，再關力矩，避免手臂直接摔下
+                try:
+                    logger.info(f"[gc] {self}: returning to hanging pose before disabling torque")
+                    gc.move_to({m: 0.0 for m in ARM_JOINTS}, 3.0)
+                    time.sleep(0.3)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"[gc] {self}: 回下垂失敗 ({e})")
+            gc.stop()  # 一定要先停掉 200 Hz 執行緒，才不會跟 disable 搶 bus
+        safe_disable(self)  # 多送幾次 disable
+        try:
+            orig_disconnect(self)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[gc] {self}: disconnect 出錯 ({e})，再補送 disable")
+            safe_disable(self)
+        _unregister(self)
+
+    def bi_disconnect(self):
+        # 左右各自關：一支出錯不會讓另一支被跳過
+        for arm in (self.left_arm, self.right_arm):
+            if not _bus_connected(arm):
+                continue
+            try:
+                arm.disconnect()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[gc] {arm}: disconnect 出錯 ({e})")
+                safe_disable(arm)
 
     BiOpenArmLeader.__init__ = bi_init
+    BiOpenArmLeader.disconnect = bi_disconnect
     _patch_follower_park()
     OpenArmLeader.connect = connect
     OpenArmLeader.get_action = get_action
@@ -487,28 +716,52 @@ def follower_park(arm, prefix: str = "", duration_per_seg: float | None = None):
         cur = goal
 
 
+_FOLLOWER_PATCHED = False
+
+
+class _SkipPark(Exception):
+    pass
+
+
 def _patch_follower_park():
-    if os.environ.get("OPENARM_PARK", "1") == "0":
+    global _FOLLOWER_PATCHED
+    if _FOLLOWER_PATCHED:
         return
+    _FOLLOWER_PATCHED = True
+    park_on = os.environ.get("OPENARM_PARK", "1") != "0"
     from lerobot.robots.bi_openarm_follower import BiOpenArmFollower
     from lerobot.robots.openarm_follower import OpenArmFollower
 
     orig_disc = OpenArmFollower.disconnect
-    orig_bi_disc = BiOpenArmFollower.disconnect
+    orig_conn = OpenArmFollower.connect
+
+    def connect(self, *a, **k):
+        orig_conn(self, *a, **k)
+        _register(self)
 
     def disconnect(self):
-        if self.bus.is_connected and self.config.disable_torque_on_disconnect and not getattr(self, "_parked", False):
+        if park_on and self.bus.is_connected and self.config.disable_torque_on_disconnect and not getattr(self, "_parked", False):
             try:
                 logger.info(f"[gc] {self}: parking to hanging pose before disabling torque")
                 follower_park(self, getattr(self, "_park_prefix", ""))
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"[gc] park failed ({e}) — disabling torque directly")
-        return orig_disc(self)
+        if self.config.disable_torque_on_disconnect:
+            safe_disable(self)
+        try:
+            return orig_disc(self)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[gc] {self}: disconnect 出錯 ({e})，再補送 disable")
+            safe_disable(self)
+        finally:
+            _unregister(self)
 
     def bi_disconnect(self):
         # 兩支同時回下垂，而不是左手先回完才輪到右手
         arms = [("left_", self.left_arm), ("right_", self.right_arm)]
         try:
+            if not park_on:
+                raise _SkipPark()
             logger.info("[gc] parking both follower arms to hanging pose ...")
             T = float(os.environ.get("OPENARM_PARK_TIME", "3"))
             cur = {}
@@ -525,10 +778,21 @@ def _patch_follower_park():
                 cur = goal
             for _, arm in arms:
                 arm._parked = True
+        except _SkipPark:
+            pass
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[gc] park failed ({e}) — disabling torque directly")
-        return orig_bi_disc(self)
+        # 左右各自關：一支出錯不會讓另一支被跳過
+        for _, arm in arms:
+            if not _bus_connected(arm):
+                continue
+            try:
+                arm.disconnect()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[gc] {arm}: disconnect 出錯 ({e})")
+                safe_disable(arm)
 
+    OpenArmFollower.connect = connect
     OpenArmFollower.disconnect = disconnect
     BiOpenArmFollower.disconnect = bi_disconnect
 
@@ -630,8 +894,11 @@ def go_home(robot, teleop, waypoints: list[dict[str, float]], duration: float, g
     logger.info(f"[gc] moving to start pose via {len(waypoints)} waypoint(s) ...")
     for f_cmd, l_cmd in plan:
         robot.send_action(f_cmd)
-        if teleop is not None:
-            teleop.send_feedback(l_cmd)
+        for prefix, leader in leaders:
+            leader._gc.set_target({
+                key[len(prefix):].removesuffix(".pos"): v
+                for key, v in l_cmd.items() if key.startswith(prefix)
+            })
         time.sleep(seg_T / n)
     time.sleep(0.3)
     for _, leader in leaders:
@@ -642,12 +909,14 @@ def go_home(robot, teleop, waypoints: list[dict[str, float]], duration: float, g
 # ---force_feedback--------------------------------------------------------
 def bind_force_feedback(robot, teleop) -> None:
     """Connect each leader controller to the matching follower state cache."""
-    ff_scale = float(os.environ.get("OPENARM_FF_SCALE", "0.0"))
+    ff_scale = float(os.environ.get("OPENARM_FF_SCALE", DEFAULT_FORCE_FEEDBACK_SCALE))
     if ff_scale <= 0:
         return
 
     bindings = []
-    if hasattr(teleop, "left_arm") and hasattr(robot, "left_arm"):
+    if all(hasattr(teleop, attr) for attr in ("left_arm", "right_arm")) and all(
+        hasattr(robot, attr) for attr in ("left_arm", "right_arm")
+    ):
         bindings.extend(
             (
                 ("left", teleop.left_arm, robot.left_arm),
@@ -669,57 +938,76 @@ def bind_force_feedback(robot, teleop) -> None:
     logger.info(
         "[gc] force feedback ON (scale=%.3g, sign=%+.0f, limit=%.3g Nm)",
         ff_scale,
-        float(os.environ.get("OPENARM_FF_SIGN", "1.0")),
-        abs(float(os.environ.get("OPENARM_FF_LIMIT", "2.0"))),
+        float(os.environ.get("OPENARM_FF_SIGN", "-1.0")),
+        abs(float(os.environ.get("OPENARM_FF_LIMIT", DEFAULT_FORCE_FEEDBACK_LIMIT))),
     )
 # -------------------------------------------------------------------------
 
+
+def _call_arguments(function, args, kwargs):
+    signature = inspect.signature(inspect.unwrap(function))
+    bound = signature.bind_partial(*args, **kwargs).arguments
+    if "kwargs" in bound:
+        return dict(bound["kwargs"])
+    return bound
+
+
 def patch_record_loop(module):
-    home_path = os.environ.get("OPENARM_HOME")
-    waypoints, duration, guard = None, 0.0, None
-    if not home_path:
-        logger.warning("[gc] OPENARM_HOME 未設定 -> 不做 homing")
-    else:
-        waypoints = load_waypoints(home_path)
-        duration = float(os.environ.get("OPENARM_HOME_TIME", str(3 * len(waypoints) + 1)))
-        if "OPENARM_TABLE_Z" in os.environ:
-            guard = TableGuard(os.environ["OPENARM_URDF"], float(os.environ["OPENARM_TABLE_Z"]),
-                               float(os.environ.get("OPENARM_TABLE_MARGIN", "0.05")))
+    home_path = _resolve_home_path()
+    os.environ["OPENARM_HOME"] = home_path
+    waypoints = load_waypoints(home_path)
+    duration = float(os.environ.get("OPENARM_HOME_TIME", str(3 * len(waypoints) + 1)))
+    guard = None
+    if "OPENARM_TABLE_Z" in os.environ:
+        guard = TableGuard(os.environ["OPENARM_URDF"], float(os.environ["OPENARM_TABLE_Z"]),
+                           float(os.environ.get("OPENARM_TABLE_MARGIN", "0.05")))
+    logger.info(
+        "[gc] homing enabled: %s (%d waypoint(s), %.1f s)",
+        home_path,
+        len(waypoints),
+        duration,
+    )
+    logger.info(
+        "[gc] force feedback configured: scale=%.3g, sign=%+.0f, limit=%.3g Nm",
+        float(os.environ.get("OPENARM_FF_SCALE", DEFAULT_FORCE_FEEDBACK_SCALE)),
+        float(os.environ.get("OPENARM_FF_SIGN", "-1.0")),
+        abs(float(os.environ.get("OPENARM_FF_LIMIT", DEFAULT_FORCE_FEEDBACK_LIMIT))),
+    )
     when = os.environ.get("OPENARM_HOME_AT", "record")  # "record" 或 "reset"
     profiler = LoopProfiler() if os.environ.get("OPENARM_PROFILE", "1") != "0" else None
     orig = module.record_loop
 
     def record_loop(*args, **kwargs):
-        bound = inspect.signature(orig).bind_partial(*args, **kwargs)
+        bound = _call_arguments(orig, args, kwargs)
         if profiler is not None:
-            profiler.attach(bound.arguments.get("robot"), bound.arguments.get("teleop"))
+            profiler.attach(bound.get("robot"), bound.get("teleop"))
         # ---force_feedback--------------------------------------------------------
-        if bound.arguments.get("robot") is not None and bound.arguments.get("teleop") is not None:
-            bind_force_feedback(bound.arguments["robot"], bound.arguments["teleop"])
+        if bound.get("robot") is not None and bound.get("teleop") is not None:
+            bind_force_feedback(bound["robot"], bound["teleop"])
         # -------------------------------------------------------------------------
-        is_recording = bound.arguments.get("dataset") is not None
-        if waypoints and bound.arguments.get("teleop") is not None and (
+        is_recording = bound.get("dataset") is not None
+        if waypoints and bound.get("teleop") is not None and (
             (when == "record" and is_recording) or (when == "reset" and not is_recording)
         ):
-            go_home(bound.arguments["robot"], bound.arguments["teleop"], waypoints, duration, guard)
+            go_home(bound["robot"], bound["teleop"], waypoints, duration, guard)
         return orig(*args, **kwargs)
 
     module.record_loop = record_loop
 
 
-def patch_teleoperate_loop(module):
+def patch_teleop_loop(module):
     """Bind follower state to leader force feedback after both devices connect."""
-    orig = module.teleoperate_loop
+    orig = module.teleop_loop
 
-    def teleoperate_loop(*args, **kwargs):
-        bound = inspect.signature(orig).bind_partial(*args, **kwargs)
-        robot = bound.arguments.get("robot")
-        teleop = bound.arguments.get("teleop")
+    def teleop_loop(*args, **kwargs):
+        bound = _call_arguments(orig, args, kwargs)
+        robot = bound.get("robot")
+        teleop = bound.get("teleop")
         if robot is not None and teleop is not None:
             bind_force_feedback(robot, teleop)
         return orig(*args, **kwargs)
 
-    module.teleoperate_loop = teleoperate_loop
+    module.teleop_loop = teleop_loop
 
 
 # ----------------------------------------------------------------------------
@@ -828,13 +1116,7 @@ def run_home(argv):
         robot.disconnect()
 
 # ----------------------------------------------------------------------------
-def main():
-    logging.basicConfig(level=logging.INFO)
-    if len(sys.argv) < 2 or sys.argv[1] not in ("record", "teleoperate", "check", "home"):
-        print(__doc__)
-        sys.exit(1)
-    mode, rest = sys.argv[1], sys.argv[2:]
-
+def _run(mode, rest):
     if mode == "check":
         run_check(rest)
         return
@@ -852,8 +1134,32 @@ def main():
     else:
         from lerobot.scripts import lerobot_teleoperate
 
-        patch_teleoperate_loop(lerobot_teleoperate)
+        patch_teleop_loop(lerobot_teleoperate)
         lerobot_teleoperate.main()
+
+
+def main():
+    logging.basicConfig(level=logging.INFO)
+    if len(sys.argv) < 2 or sys.argv[1] not in ("record", "teleoperate", "check", "home"):
+        print(__doc__)
+        sys.exit(1)
+    mode, rest = sys.argv[1], sys.argv[2:]
+
+    # kill / 關終端機 (SIGTERM, SIGHUP) 也走正常的關閉流程
+    def _on_signal(signum, _frame):
+        raise KeyboardInterrupt(f"signal {signum}")
+
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, _on_signal)
+    atexit.register(final_safety_net)  # 萬一 finally 沒跑到的最後保險
+
+    can_setup_and_check()
+    try:
+        _run(mode, rest)
+
+    finally:
+        final_safety_net()  # 還連著的手臂一律關力矩
+        can_teardown()      # 只在 OPENARM_CAN_DOWN=1 時關介面，且一定在關力矩之後
 
 
 if __name__ == "__main__":
