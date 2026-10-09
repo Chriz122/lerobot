@@ -85,7 +85,11 @@ class BiOpenArmLeader(BimanualMixin, Teleoperator):
 
     @cached_property
     def feedback_features(self) -> dict[str, type]:
-        return {}
+        # Feedback uses the same names as arm positions, prefixed by its side.
+        return {
+            **{f"left_{k}": v for k, v in self.left_arm.action_features.items() if k.endswith(".pos")},
+            **{f"right_{k}": v for k, v in self.right_arm.action_features.items() if k.endswith(".pos")},
+        }
 
     def setup_motors(self) -> None:
         raise NotImplementedError(
@@ -106,6 +110,22 @@ class BiOpenArmLeader(BimanualMixin, Teleoperator):
 
         return action_dict
 
+    @check_if_not_connected
     def send_feedback(self, feedback: dict[str, float]) -> None:
-        # TODO: Implement force feedback
-        raise NotImplementedError
+        # Split the bimanual feedback into each arm's local key space.
+        left_feedback = {
+            key.removeprefix("left_"): value
+            for key, value in feedback.items()
+            if key.startswith("left_")
+        }
+        right_feedback = {
+            key.removeprefix("right_"): value
+            for key, value in feedback.items()
+            if key.startswith("right_")
+        }
+
+        # Forward only non-empty payloads so the other arm is not commanded.
+        if left_feedback:
+            self.left_arm.send_feedback(left_feedback)
+        if right_feedback:
+            self.right_arm.send_feedback(right_feedback)
