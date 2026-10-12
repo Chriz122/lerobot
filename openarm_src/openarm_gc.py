@@ -27,6 +27,9 @@ Gravity compensation for OpenArm leader arms + home pose before every episode.
   # 3) 只做遙操作 (無 home)
   python openarm_gc.py teleoperate <lerobot-teleoperate 參數>
 
+  # 4) HIL / DAgger (參數與 lerobot-rollout 相同；設了 OPENARM_HOME 會在 policy 開始前先 home 一次)
+  python openarm_gc.py rollout --strategy.type=dagger --policy.path=... --teleop.type=bi_openarm_leader ...
+
 環境變數 / Env vars
   OPENARM_URDF        (必填) bimanual URDF 路徑，關節名 openarm_{left,right}_joint1..7
   OPENARM_HOME        home.json 路徑；不設則不做 homing
@@ -778,17 +781,23 @@ def go_home(robot, teleop, waypoints: list[dict[str, float]], duration: float, g
     logger.info("[gc] at start pose — released leader, recording starts")
 
 
-def patch_record_loop(module):
+def _home_config():
+    """讀 OPENARM_HOME / OPENARM_HOME_TIME / OPENARM_TABLE_Z，回傳 (waypoints, duration, guard)。"""
     home_path = os.environ.get("OPENARM_HOME")
-    waypoints, duration, guard = None, 0.0, None
     if not home_path:
         logger.warning("[gc] OPENARM_HOME 未設定 -> 不做 homing")
-    else:
-        waypoints = load_waypoints(home_path)
-        duration = float(os.environ.get("OPENARM_HOME_TIME", str(3 * len(waypoints) + 1)))
-        if "OPENARM_TABLE_Z" in os.environ:
-            guard = TableGuard(os.environ["OPENARM_URDF"], float(os.environ["OPENARM_TABLE_Z"]),
-                               float(os.environ.get("OPENARM_TABLE_MARGIN", "0.05")))
+        return None, 0.0, None
+    waypoints = load_waypoints(home_path)
+    duration = float(os.environ.get("OPENARM_HOME_TIME", str(3 * len(waypoints) + 1)))
+    guard = None
+    if "OPENARM_TABLE_Z" in os.environ:
+        guard = TableGuard(os.environ["OPENARM_URDF"], float(os.environ["OPENARM_TABLE_Z"]),
+                           float(os.environ.get("OPENARM_TABLE_MARGIN", "0.05")))
+    return waypoints, duration, guard
+
+
+def patch_record_loop(module):
+    waypoints, duration, guard = _home_config()
     when = os.environ.get("OPENARM_HOME_AT", "record")  # "record" 或 "reset"
     profiler = LoopProfiler() if os.environ.get("OPENARM_PROFILE", "1") != "0" else None
     orig = module.record_loop
@@ -804,6 +813,23 @@ def patch_record_loop(module):
         return orig(*args, **kwargs)
 
     module.record_loop = record_loop
+
+
+def patch_rollout(module):
+    """lerobot-rollout：硬體連線完成 (build_rollout_context) 後、policy 開始動之前，
+    leader + follower 一起移到 OPENARM_HOME 起始姿態，然後放開 leader。"""
+    waypoints, duration, guard = _home_config()
+    orig = module.build_rollout_context
+
+    def build_rollout_context(*args, **kwargs):
+        ctx = orig(*args, **kwargs)
+        teleop = ctx.hardware.teleop
+        if waypoints and teleop is not None:
+            # 用原始 robot (不經 ThreadSafeRobot)；此時 inference engine 還沒啟動，不會搶 bus
+            go_home(ctx.hardware.robot_wrapper.inner, teleop, waypoints, duration, guard)
+        return ctx
+
+    module.build_rollout_context = build_rollout_context
 
 
 # ----------------------------------------------------------------------------
@@ -927,6 +953,11 @@ def _run(mode, rest):
 
         patch_record_loop(lerobot_record)
         lerobot_record.main()
+    elif mode == "rollout":
+        from lerobot.scripts import lerobot_rollout
+
+        patch_rollout(lerobot_rollout)
+        lerobot_rollout.main()
     else:
         from lerobot.scripts import lerobot_teleoperate
 
@@ -935,7 +966,7 @@ def _run(mode, rest):
 
 def main():
     logging.basicConfig(level=logging.INFO)
-    if len(sys.argv) < 2 or sys.argv[1] not in ("record", "teleoperate", "check", "home"):
+    if len(sys.argv) < 2 or sys.argv[1] not in ("record", "teleoperate", "rollout", "check", "home"):
         print(__doc__)
         sys.exit(1)
     mode, rest = sys.argv[1], sys.argv[2:]
