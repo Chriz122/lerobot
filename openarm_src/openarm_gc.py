@@ -47,6 +47,7 @@ Gravity compensation for OpenArm leader arms + home pose before every episode.
   OPENARM_LEADER_SIDE 單臂 openarm_leader 時指定 left / right
   OPENARM_GC_STATS    1 (預設) = 每 5 秒印出重力補償迴圈實際頻率 / CAN 通訊時間；0 = 關閉
   OPENARM_PROFILE     1 (預設) = record 時每 5 秒印出主迴圈各步驟耗時；0 = 關閉
+  OPENARM_LEADER_TRACK 1 (預設) = DAgger 推論時 leader 鏡像跟隨 follower，介入時自動釋放；0 = 關閉跟隨
 
   --- CAN 管理 / 安全關閉 ---
   OPENARM_CAN_SETUP   1 (預設) = 開始前自動 lerobot-setup-can 打開介面，並測試到所有馬達都回應為止；0 = 不管
@@ -816,10 +817,14 @@ def patch_record_loop(module):
 
 
 def patch_rollout(module):
-    """lerobot-rollout：硬體連線完成 (build_rollout_context) 後、policy 開始動之前，
-    leader + follower 一起移到 OPENARM_HOME 起始姿態，然後放開 leader。"""
+    """lerobot-rollout：
+    1. 硬體連線完成 (build_rollout_context) 後、policy 開始動之前，leader + follower 一起移到 OPENARM_HOME 起始姿態。
+    2. DAgger 推論時 (AUTONOMOUS)，讓 leader 即時鏡像跟隨 follower 移動。
+    3. 人類介入時 (CORRECTING)，leader 立即釋放 target，回歸零力重力補償供手動示範。
+    """
     waypoints, duration, guard = _home_config()
     orig = module.build_rollout_context
+    track_leader = os.environ.get("OPENARM_LEADER_TRACK", "1") != "0"
 
     def build_rollout_context(*args, **kwargs):
         ctx = orig(*args, **kwargs)
@@ -827,6 +832,55 @@ def patch_rollout(module):
         if waypoints and teleop is not None:
             # 用原始 robot (不經 ThreadSafeRobot)；此時 inference engine 還沒啟動，不會搶 bus
             go_home(ctx.hardware.robot_wrapper.inner, teleop, waypoints, duration, guard)
+
+        if track_leader and teleop is not None:
+            leaders = _leaders(teleop)
+            if leaders:
+                _is_tracking = True
+
+                # 1. 攔截 robot_wrapper.send_action：讓 leader 同步跟隨 follower 目標角度
+                orig_send_action = ctx.hardware.robot_wrapper.send_action
+
+                def send_action_with_tracking(action):
+                    res = orig_send_action(action)
+                    nonlocal _is_tracking
+                    if _is_tracking and isinstance(action, dict):
+                        for prefix, leader in leaders:
+                            leader_cmd = {
+                                key[len(prefix):].removesuffix(".pos"): float(v)
+                                for key, v in action.items()
+                                if key.startswith(prefix)
+                            }
+                            if leader_cmd:
+                                leader._gc.set_target(leader_cmd)
+                    return res
+
+                ctx.hardware.robot_wrapper.send_action = send_action_with_tracking
+
+                # 2. Hook DAgger 狀態機切換：進入 CORRECTING 時立刻放開 leader
+                from lerobot.rollout.strategies.dagger import DAggerPhase, DAggerStrategy
+
+                orig_apply_transition = DAggerStrategy._apply_transition
+
+                def apply_transition_with_tracking(self, old_phase, new_phase, *t_args, **t_kwargs):
+                    nonlocal _is_tracking
+                    if new_phase == DAggerPhase.CORRECTING:
+                        _is_tracking = False
+                        logger.info("[gc] 人類介入 (CORRECTING)：釋放 leader 目標，進入純重力補償手動模式")
+                        for _, leader in leaders:
+                            leader._gc.set_target(None)
+                    elif new_phase == DAggerPhase.AUTONOMOUS:
+                        _is_tracking = True
+                        logger.info("[gc] 恢復自主 (AUTONOMOUS)：啟用 leader 跟隨 follower")
+                    elif new_phase == DAggerPhase.PAUSED:
+                        # 暫停時停止持續更新，但維持在最後位置
+                        _is_tracking = False
+
+                    return orig_apply_transition(self, old_phase, new_phase, *t_args, **t_kwargs)
+
+                DAggerStrategy._apply_transition = apply_transition_with_tracking
+                logger.info("[gc] 已啟用 DAgger Leader 鏡像跟隨 (OPENARM_LEADER_TRACK=1)")
+
         return ctx
 
     module.build_rollout_context = build_rollout_context
