@@ -19,7 +19,6 @@ import random
 from pathlib import Path
 
 import numpy as np
-import torch
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 N_RANDOM = 5          # 每集額外隨機抽幾幀

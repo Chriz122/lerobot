@@ -21,7 +21,7 @@ import time
 import importlib
 from importlib.metadata import entry_points
 
-import openarm_src.openarm_gc as gc
+from openarm_src.utils import load_waypoints, min_jerk, patch_follower_park
 
 HOME_FILE = os.environ.get("OPENARM_HOME", "reset.json")
 SEG_TIME = float(os.environ.get("OPENARM_HOME_TIME", "4"))
@@ -45,20 +45,20 @@ def _move_to(robot, goal: dict[str, float], duration: float):
     start = {k: float(obs[k]) for k in goal}
     n = max(1, int(duration * CTRL_HZ))
     for i in range(1, n + 1):
-        s = gc.min_jerk(i / n)
+        s = min_jerk(i / n)
         robot.send_action({k: start[k] + (goal[k] - start[k]) * s for k in goal})
         time.sleep(1.0 / CTRL_HZ)
 
 
 def install_patches():
-    gc._patch_follower_park()  # 結束時先回下垂再關力矩
+    patch_follower_park()  # 結束時先回下垂再關力矩
 
     cls = _find_bi_follower_cls()
     orig_connect = cls.connect
 
     def connect(self, *args, **kwargs):
         orig_connect(self, *args, **kwargs)
-        waypoints = gc.load_waypoints(HOME_FILE)
+        waypoints = load_waypoints(HOME_FILE)
         input(f"\n⚠  follower 將移到起始姿態（{HOME_FILE}，{len(waypoints)} 段）。淨空桌面、手放急停旁，按 Enter 開始移動 ...")
         for i, wp in enumerate(waypoints, 1):
             print(f"[home] 移動到 waypoint {i}/{len(waypoints)} ...")

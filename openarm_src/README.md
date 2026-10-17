@@ -76,8 +76,16 @@ python openarm_gc.py rollout \
 
 ## 進階選項與常見問題
 
-### 連同 Policy 自主運行的過程一起錄製？
+### 1. 連同 Policy 自主運行的過程一起錄製？
 預設為 `corrections-only`（僅記錄人類修正）。若希望自主與修正過程均被完整錄製下來（附帶 `intervention=True/False` 標籤），可在指令加入：
 ```bash
 --strategy.record_autonomous=true
 ```
+
+### 2. 雙向力回饋開關 (`--bilateral=true/false`)
+在 `record` 或 `teleoperate` 時，可直接透過 CLI 旗標開啟或關閉夾爪力回饋：
+```bash
+python openarm_gc.py record --bilateral=true ...
+```
+- `--bilateral=true`：開啟力回饋（若未設 `OPENARM_FF_SCALE`，會預設以 `0.05` 啟動）。
+- `--bilateral=false`：關閉力回饋（將 `OPENARM_FF_SCALE=0`）。
