@@ -48,6 +48,8 @@ Gravity compensation for OpenArm leader arms + home pose before every episode.
   OPENARM_GC_STATS    1 (預設) = 每 5 秒印出重力補償迴圈實際頻率 / CAN 通訊時間；0 = 關閉
   OPENARM_PROFILE     1 (預設) = record 時每 5 秒印出主迴圈各步驟耗時；0 = 關閉
   OPENARM_LEADER_TRACK 1 (預設) = DAgger 推論時 leader 鏡像跟隨 follower，介入時自動釋放；0 = 關閉跟隨
+  OPENARM_ACTIVE_ARM  rollout 單臂測試：left / right = 只讓這支手臂照模型動，另一支固定在起始姿態；
+                      不設 = 兩支都照模型動。模型仍輸入完整 16 維 state 與三台相機，只是另一支的輸出被換成固定姿態
 
   --- CAN 管理 / 安全關閉 ---
   OPENARM_CAN_SETUP   1 (預設) = 開始前自動 lerobot-setup-can 打開介面，並測試到所有馬達都回應為止；0 = 不管
@@ -825,13 +827,37 @@ def patch_rollout(module):
     waypoints, duration, guard = _home_config()
     orig = module.build_rollout_context
     track_leader = os.environ.get("OPENARM_LEADER_TRACK", "1") != "0"
+    active = os.environ.get("OPENARM_ACTIVE_ARM", "").strip().lower()
+    if active not in ("", "left", "right"):
+        sys.exit(f"OPENARM_ACTIVE_ARM 只能是 left / right，收到 {active!r}")
 
     def build_rollout_context(*args, **kwargs):
         ctx = orig(*args, **kwargs)
         teleop = ctx.hardware.teleop
-        if waypoints and teleop is not None:
+        inner = ctx.hardware.robot_wrapper.inner
+        if waypoints:
             # 用原始 robot (不經 ThreadSafeRobot)；此時 inference engine 還沒啟動，不會搶 bus
-            go_home(ctx.hardware.robot_wrapper.inner, teleop, waypoints, duration, guard)
+            # 沒有 teleop (例如 --strategy.type=base) 時只移 follower
+            go_home(inner, teleop, waypoints, duration, guard)
+
+        if active:
+            # 單臂測試：另一支手臂鎖在「現在」的姿態 (有 home 就是起始姿態)，模型對它的輸出全部丟掉
+            frozen = "right_" if active == "left" else "left_"
+            obs = inner.get_observation()
+            hold = {k: float(v) for k, v in obs.items() if k.startswith(frozen) and k.endswith(".pos")}
+            if not hold:
+                sys.exit(f"[single-arm] 找不到 {frozen}*.pos，robot 是不是 bi_openarm_follower？")
+            orig_send = ctx.hardware.robot_wrapper.send_action
+
+            def send_action_single_arm(action):
+                if isinstance(action, dict):
+                    action = {**action, **hold}
+                return orig_send(action)
+
+            ctx.hardware.robot_wrapper.send_action = send_action_single_arm
+            logger.info(f"[single-arm] 只執行 {active} 手臂；{frozen.rstrip('_')} 手臂固定在目前姿態 ({len(hold)} 個關節)")
+            if waypoints is None:
+                logger.warning("[single-arm] 沒設 OPENARM_HOME：固定的那支手臂會停在『啟動當下』的姿態，建議先 home")
 
         if track_leader and teleop is not None:
             leaders = _leaders(teleop)
