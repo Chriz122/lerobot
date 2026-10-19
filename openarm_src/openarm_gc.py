@@ -12,7 +12,7 @@ Gravity compensation for OpenArm leader arms + home pose before every episode.
 用法 / Usage
 ------------
   # 0) 產生 URDF (在有 ROS 2 + openarm_description 的機器上)，並設定環境變數
-  export OPENARM_URDF=~/openarm_bimanual.urdf
+  export OPENARM_URDF=~/ros2_ws/src/openarm_description/assets/robot/openarm_v1.0/urdf/example/v1.urdf
 
   # 1) 檢查重力補償方向 + 擺出起始姿態並存檔
   python openarm_gc.py check --id my_bimanual_leader --left-port can2 --right-port can3 --save home.json
@@ -593,6 +593,33 @@ def follower_park(arm, prefix: str = "", duration_per_seg: float | None = None):
 
 
 _FOLLOWER_PATCHED = False
+_ENABLE_PATCHED = False
+
+
+def _patch_enable_retry():
+    """讓所有 enable_torque (包含 LeRobot follower connect 裡那一次) 每顆馬達最多重送 ENABLE_RETRY 次。"""
+    global _ENABLE_PATCHED
+    if _ENABLE_PATCHED:
+        return
+    _ENABLE_PATCHED = True
+    from lerobot.motors.damiao.damiao import DamiaoMotorsBus
+
+    orig_enable = DamiaoMotorsBus.enable_torque
+
+    def enable_torque(self, motors=None, *a, **k):
+        names = list(self.motors) if motors is None else ([motors] if isinstance(motors, str) else list(motors))
+        for m in names:
+            for i in range(1, ENABLE_RETRY + 1):
+                try:
+                    orig_enable(self, [m], *a, **k)
+                    break
+                except ConnectionError as e:
+                    if i == ENABLE_RETRY:
+                        raise
+                    logger.warning(f"[can] {self.port}/{m}: enable 第 {i}/{ENABLE_RETRY} 次沒回應 ({e})，重送")
+                    time.sleep(0.05)
+
+    DamiaoMotorsBus.enable_torque = enable_torque
 
 
 class _SkipPark(Exception):
@@ -605,6 +632,7 @@ def _patch_follower_park():
         return
     _FOLLOWER_PATCHED = True
     park_on = os.environ.get("OPENARM_PARK", "1") != "0"
+    _patch_enable_retry()
     from lerobot.robots.bi_openarm_follower import BiOpenArmFollower
     from lerobot.robots.openarm_follower import OpenArmFollower
 
@@ -612,8 +640,14 @@ def _patch_follower_park():
     orig_conn = OpenArmFollower.connect
 
     def connect(self, *a, **k):
-        orig_conn(self, *a, **k)
-        _register(self)
+        _register(self)  # 先登記：connect 中途失敗時，已 enable 的馬達也會被補關
+        try:
+            orig_conn(self, *a, **k)
+        except Exception:
+            logger.warning(f"[gc] {self}: connect 失敗 -> 關閉已開啟力矩的馬達")
+            safe_disable(self)
+            _unregister(self)
+            raise
 
     def disconnect(self):
         if park_on and self.bus.is_connected and self.config.disable_torque_on_disconnect and not getattr(self, "_parked", False):
