@@ -143,6 +143,7 @@ def test_motor(bus, motor_id: int, timeout: float, use_fd: bool):
         msg = bus.recv(timeout=0.1)
         if msg:
             responses.append((msg.arbitration_id, msg.data.hex(), getattr(msg, "is_fd", False)))
+            break
 
     disable_msg = can.Message(
         arbitration_id=motor_id,
@@ -201,7 +202,7 @@ def test_interface(cfg: CANSetupConfig, interface: str):
                 print(f"  Motor 0x{motor_id:02X} ({motor_name}): ✗ No response")
                 results[motor_id] = {"found": False}
 
-            time.sleep(0.05)
+            time.sleep(0.005)
     finally:
         bus.shutdown()
 
