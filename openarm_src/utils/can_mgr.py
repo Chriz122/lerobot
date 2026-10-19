@@ -7,18 +7,9 @@ import subprocess
 import sys
 import time
 
-logger = logging.getLogger("openarm_gc.can_mgr")
+from openarm_src.utils.config import MOTOR_NAMES
 
-MOTOR_NAMES = {
-    0x01: "joint_1",
-    0x02: "joint_2",
-    0x03: "joint_3",
-    0x04: "joint_4",
-    0x05: "joint_5",
-    0x06: "joint_6",
-    0x07: "joint_7",
-    0x08: "gripper",
-}
+logger = logging.getLogger("openarm_gc.can_mgr")
 
 
 def get_can_ifaces() -> list[str]:
@@ -87,7 +78,7 @@ def can_setup_and_check(max_tries: int = 3):
 
     ifaces = get_can_ifaces()
 
-    # 1. 檢查哪些介面需要 setup（若已在 UP + CAN FD 狀態則略過）
+    # 檢查哪些介面需要 setup（若已在 UP + CAN FD 狀態則略過）
     down_ifaces = [i for i in ifaces if not is_iface_up(i)]
     if down_ifaces:
         logger.info(f"[can] 設定並開啟介面: {','.join(down_ifaces)}")
@@ -101,7 +92,7 @@ def can_setup_and_check(max_tries: int = 3):
 
     expected = 8 * len(ifaces)
 
-    # 2. 並行快速探測馬達（針對尚未回應的馬達進行 probe）
+    # 並行快速探測馬達（針對尚未回應的馬達進行 probe）
     all_found: dict[str, set[int]] = {i: set() for i in ifaces}
     missing_desc: list[str] = []
 

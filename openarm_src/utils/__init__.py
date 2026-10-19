@@ -22,6 +22,7 @@ from openarm_src.utils.config import (
     HOLD_KP,
     JOINT_GC_SCALE,
     JOINT_SIGN,
+    MOTOR_NAMES,
     STATS_PERIOD,
     TAU_LIMIT,
 )
@@ -72,6 +73,7 @@ __all__ = [
     "JOINT_SIGN",
     "LeaderGC",
     "LoopProfiler",
+    "MOTOR_NAMES",
     "STATS_PERIOD",
     "TAU_LIMIT",
     "TableGuard",

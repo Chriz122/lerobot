@@ -8,6 +8,17 @@ import os
 ARM_JOINTS = [f"joint_{i}" for i in range(1, 8)]
 GRIPPER = "gripper"
 
+MOTOR_NAMES: dict[int, str] = {
+    0x01: "joint_1",
+    0x02: "joint_2",
+    0x03: "joint_3",
+    0x04: "joint_4",
+    0x05: "joint_5",
+    0x06: "joint_6",
+    0x07: "joint_7",
+    0x08: "gripper",
+}
+
 # LeRobot 角度 -> URDF 角度 的正負號。v1 URDF 與 LeRobot 的 joint limit 方向一致，預設全 +1。
 # 若 check 時某關節「越補越重」，把該關節改成 -1。
 JOINT_SIGN = {"left": [1, 1, 1, 1, 1, 1, 1], "right": [1, 1, 1, 1, 1, 1, 1]}
