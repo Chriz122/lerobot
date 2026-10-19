@@ -13,7 +13,7 @@ Gravity compensation for OpenArm leader arms + home pose before every episode.
 用法 / Usage
 ------------
   # 0) 產生 URDF (在有 ROS 2 + openarm_description 的機器上)，並設定環境變數
-  export OPENARM_URDF=~/openarm_bimanual.urdf
+  export OPENARM_URDF=~/ros2_ws/src/openarm_description/assets/robot/openarm_v1.0/urdf/example/v1.urdf
 
   # 1) 檢查重力補償方向 + 擺出起始姿態並存檔
   python openarm_gc.py check --id my_bimanual_leader --left-port can2 --right-port can3 --save home.json
