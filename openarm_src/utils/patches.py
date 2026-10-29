@@ -448,6 +448,14 @@ def patch_record_loop(module):
     waypoints, duration, guard = load_home_config()
     when = os.environ.get("OPENARM_HOME_AT", "record")  # "record" 或 "reset"
     profiler = LoopProfiler() if os.environ.get("OPENARM_PROFILE", "1") != "0" else None
+
+    streamer = None
+    if os.environ.get("OPENARM_WEBRTC", "0") == "1":
+        from openarm_src.utils.webrtc_streamer import get_webrtc_streamer
+        port = int(os.environ.get("OPENARM_WEBRTC_PORT", "8080"))
+        streamer = get_webrtc_streamer(port=port)
+        streamer.start()
+
     orig = module.record_loop
 
     def record_loop(*args, **kwargs):
@@ -456,6 +464,10 @@ def patch_record_loop(module):
         teleop = bound.get("teleop")
         if profiler is not None:
             profiler.attach(robot, teleop)
+        if streamer is not None:
+            streamer.attach(robot, teleop)
+            is_recording = bound.get("dataset") is not None
+            streamer.set_recording(is_recording)
         if robot is not None and teleop is not None:
             bind_force_feedback(robot, teleop)
         is_recording = bound.get("dataset") is not None
@@ -470,12 +482,22 @@ def patch_record_loop(module):
 
 def patch_teleop_loop(module):
     """Bind follower state to leader force feedback after both devices connect."""
+    streamer = None
+    if os.environ.get("OPENARM_WEBRTC", "0") == "1":
+        from openarm_src.utils.webrtc_streamer import get_webrtc_streamer
+        port = int(os.environ.get("OPENARM_WEBRTC_PORT", "8080"))
+        streamer = get_webrtc_streamer(port=port)
+        streamer.start()
+
     orig = module.teleop_loop
 
     def teleop_loop(*args, **kwargs):
         bound = _call_arguments(orig, args, kwargs)
         robot = bound.get("robot")
         teleop = bound.get("teleop")
+        if streamer is not None:
+            streamer.attach(robot, teleop)
+            streamer.set_recording(False)
         if robot is not None and teleop is not None:
             bind_force_feedback(robot, teleop)
         return orig(*args, **kwargs)

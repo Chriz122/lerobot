@@ -34,6 +34,11 @@ Gravity compensation for OpenArm leader arms + home pose before every episode.
   # 力回饋雙向控制開關 (Bilateral teleoperation)
   --bilateral=true / --bilateral=false (在 record 或 teleoperate 時可用，預設依 OPENARM_FF_SCALE 決定)
 
+  # WebRTC 實時影像串流與延遲監控 (供其他電腦遠端觀看與監測延遲)
+  -webrtc=true / --webrtc=true (可選 --webrtc-port=8080，預設通訊埠 8080)
+  範例:
+  python openarm_gc.py record -webrtc=true --robot.type=bi_openarm_follower ...
+
 環境變數 / Env vars
   OPENARM_URDF        (必填) bimanual URDF 路徑，關節名 openarm_{left,right}_joint1..7
   OPENARM_HOME        home.json 路徑；不設則不做 homing
@@ -59,6 +64,9 @@ Gravity compensation for OpenArm leader arms + home pose before every episode.
   OPENARM_GC_STATS    1 (預設) = 每 5 秒印出重力補償迴圈實際頻率 / CAN 通訊時間；0 = 關閉
   OPENARM_PROFILE     1 (預設) = record 時每 5 秒印出主迴圈各步驟耗時；0 = 關閉
   OPENARM_LEADER_TRACK 1 (預設) = DAgger 推論時 leader 鏡像跟隨 follower，介入時自動釋放；0 = 關閉跟隨
+  # --- WebRTC 實時串流與延遲監控 ---
+  OPENARM_WEBRTC      1 = 啟用 WebRTC 串流伺服器；0 = 關閉 (可直接使用 -webrtc=true 開啟)
+  OPENARM_WEBRTC_PORT WebRTC 網頁通訊埠，預設 8080
 
   --- CAN 管理 / 安全關閉 ---
   OPENARM_CAN_SETUP   1 (預設) = 開始前自動 lerobot-setup-can 打開介面，並測試到所有馬達都回應為止；0 = 不管

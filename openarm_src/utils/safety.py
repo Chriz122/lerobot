@@ -63,3 +63,9 @@ def final_safety_net():
             safe_disable(arm)
         unregister_arm(arm)
 
+    try:
+        from openarm_src.utils.webrtc_streamer import stop_webrtc_streamer
+        stop_webrtc_streamer()
+    except Exception:
+        pass
+

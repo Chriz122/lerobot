@@ -152,6 +152,55 @@ def parse_bilateral_flag(args: list[str]) -> tuple[bool, list[str]]:
     return bool(bilateral), cleaned
 
 
+def parse_webrtc_flag(args: list[str]) -> tuple[bool, int, list[str]]:
+    """從命令列參數中解析並抽離 -webrtc=true/false / --webrtc=true/false 及 port 設定。
+
+    設定 OPENARM_WEBRTC 與 OPENARM_WEBRTC_PORT 環境變數，並抽離該參數避免 LeRobot 報錯。
+    """
+    cleaned = []
+    webrtc_enabled = None
+    webrtc_port = int(os.environ.get("OPENARM_WEBRTC_PORT", "8080"))
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg.startswith(("--webrtc=", "-webrtc=")):
+            val = arg.split("=", 1)[1].strip().lower()
+            webrtc_enabled = val in ("1", "true", "yes", "on")
+        elif arg in ("--webrtc", "-webrtc"):
+            if i + 1 < len(args) and not args[i + 1].startswith("-"):
+                val = args[i + 1].strip().lower()
+                webrtc_enabled = val in ("1", "true", "yes", "on")
+                i += 1
+            else:
+                webrtc_enabled = True
+        elif arg.startswith(("--webrtc-port=", "-webrtc-port=")):
+            try:
+                webrtc_port = int(arg.split("=", 1)[1].strip())
+            except ValueError:
+                pass
+        elif arg in ("--webrtc-port", "-webrtc-port"):
+            if i + 1 < len(args) and not args[i + 1].startswith("-"):
+                try:
+                    webrtc_port = int(args[i + 1].strip())
+                except ValueError:
+                    pass
+                i += 1
+        else:
+            cleaned.append(arg)
+        i += 1
+
+    if webrtc_enabled is not None:
+        if webrtc_enabled:
+            os.environ["OPENARM_WEBRTC"] = "1"
+            os.environ["OPENARM_WEBRTC_PORT"] = str(webrtc_port)
+            logger.info("[gc] WebRTC 實時串流伺服器已啟用 (-webrtc=true)，通訊埠: %d", webrtc_port)
+        else:
+            os.environ["OPENARM_WEBRTC"] = "0"
+            logger.info("[gc] WebRTC 實時串流已停用 (-webrtc=false)")
+
+    return bool(webrtc_enabled), webrtc_port, cleaned
+
+
 def run_cli_mode(mode: str, rest: list[str]):
     if mode == "check":
         run_check(rest)
@@ -162,6 +211,8 @@ def run_cli_mode(mode: str, rest: list[str]):
 
     # 解析並過濾 --bilateral 參數，避免傳給 LeRobot 引發不認識參數的錯誤
     _, cleaned_rest = parse_bilateral_flag(rest)
+    # 解析並過濾 -webrtc 參數
+    _, _, cleaned_rest = parse_webrtc_flag(cleaned_rest)
 
     install_patches()
     sys.argv = [f"lerobot-{mode}"] + cleaned_rest
