@@ -37,11 +37,13 @@ from openarm_src.utils.homing import (
 )
 from openarm_src.utils.leader_controller import LeaderGC
 from openarm_src.utils.patches import (
+    DAMIAO_ERROR_CODES,
     bimanual_disconnect,
     bind_force_feedback,
     follower_park,
     install_patches,
     patch_follower_park,
+    patch_gripper_monitor,
     patch_record_loop,
     patch_rollout,
     patch_teleop_loop,
@@ -58,6 +60,7 @@ from openarm_src.utils.safety import (
 __all__ = [
     "ARM_JOINTS",
     "CONTROL_HZ",
+    "DAMIAO_ERROR_CODES",
     "DISABLE_RETRY",
     "ENABLE_RETRY",
     "FRICTION_COMP",
@@ -92,6 +95,7 @@ __all__ = [
     "load_waypoints",
     "min_jerk",
     "patch_follower_park",
+    "patch_gripper_monitor",
     "patch_record_loop",
     "patch_rollout",
     "register_arm",

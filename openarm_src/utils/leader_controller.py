@@ -213,6 +213,13 @@ class LeaderGC:
                         cmds[GRIPPER] = (GRIPPER_HOLD_KP, GRIPPER_HOLD_KD, float(target[GRIPPER]), 0.0, 0.0)
                     else:
                         g = cache[GRIPPER]["position"]
+                        if self.ff_limit > 0 and abs(feedback_tau) >= self.ff_limit * 0.9:
+                            now_ff = time.perf_counter()
+                            if now_ff - getattr(self, "_last_ff_warn_t", 0.0) >= 1.0:
+                                self._last_ff_warn_t = now_ff
+                                logger.warning(
+                                    f"[夾爪力回饋告警] {self.gm.side} 夾爪反饋力矩達 {feedback_tau:.2f} Nm（接近上限 {self.ff_limit:.2f} Nm）"
+                                )
                         cmds[GRIPPER] = (
                             0.0,
                             GRIPPER_KD * self.kd_scale,
