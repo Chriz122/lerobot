@@ -1046,14 +1046,16 @@ class WebRTCStreamer:
 
             # 上排：ego 置中於頂部
             top_row = np.zeros((h_ego, w_total, 3), dtype=np.uint8)
-            top_row[:] = (15, 23, 42)
+            # 純黑底色 (0, 0, 0)
+            top_row[:] = (0, 0, 0)
             x_ego = (w_total - ego_img.shape[1]) // 2
             top_row[:, x_ego : x_ego + ego_img.shape[1]] = ego_img
 
             # 下排：若寬度小於 w_total，則下排也置中留白
             if bot_row.shape[1] < w_total:
                 bot_canvas = np.zeros((h_bot, w_total, 3), dtype=np.uint8)
-                bot_canvas[:] = (15, 23, 42)
+                # 純黑底色 (0, 0, 0)
+                bot_canvas[:] = (0, 0, 0)
                 x_bot = (w_total - bot_row.shape[1]) // 2
                 bot_canvas[:, x_bot : x_bot + bot_row.shape[1]] = bot_row
                 bot_row = bot_canvas
@@ -1094,11 +1096,11 @@ class WebRTCStreamer:
             w = max(r1.shape[1], r2.shape[1])
             if r1.shape[1] < w:
                 pad = np.zeros((r1.shape[0], w - r1.shape[1], 3), dtype=np.uint8)
-                pad[:] = (15, 23, 42)
+                pad[:] = (0, 0, 0)
                 r1 = np.hstack([r1, pad])
             if r2.shape[1] < w:
                 pad = np.zeros((r2.shape[0], w - r2.shape[1], 3), dtype=np.uint8)
-                pad[:] = (15, 23, 42)
+                pad[:] = (0, 0, 0)
                 r2 = np.hstack([r2, pad])
             return np.vstack([r1, r2])
 
