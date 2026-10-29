@@ -34,7 +34,7 @@ def _call_arguments(function, args, kwargs):
 
 
 def bind_force_feedback(robot, teleop) -> None:
-    """Connect each leader controller to the matching follower state cache."""
+    """連接 follower 與 leader：leader._gc.set_feedback_source(follower)"""
     ff_scale = float(os.environ.get("OPENARM_FF_SCALE", DEFAULT_FORCE_FEEDBACK_SCALE))
     if ff_scale <= 0:
         return
@@ -104,6 +104,77 @@ def follower_park(arm, prefix: str = "", duration_per_seg: float | None = None):
         cur = goal
 
 
+def bimanual_disconnect(self):
+    """雙手設備 (BiOpenArmLeader / BiOpenArmFollower) 同步回位至下垂姿態後，安全中斷連線。"""
+    park_on = os.environ.get("OPENARM_PARK", "1") != "0"
+    arms = [("left_", self.left_arm), ("right_", self.right_arm)]
+    is_leader = hasattr(self.left_arm, "_gc") or not hasattr(self, "send_action")
+    label = "主臂" if is_leader else "從臂"
+
+    try:
+        if not park_on:
+            raise _SkipPark()
+
+        logger.info(f"[gc] 正在將雙{label}回位至下垂姿態...")
+        T = float(os.environ.get("OPENARM_PARK_TIME", "3"))
+        cur = {}
+
+        if is_leader:
+            for pfx, arm in arms:
+                gc = getattr(arm, "_gc", None)
+                if gc is not None and gc.error is None:
+                    pos = gc.positions()
+                    for m in ARM_JOINTS:
+                        if m in pos:
+                            cur[f"{pfx}{m}.pos"] = float(pos[m])
+        else:
+            for pfx, arm in arms:
+                for m, v in arm.bus.sync_read("Present_Position").items():
+                    cur[f"{pfx}{m}.pos"] = float(v)
+
+        if not cur:
+            raise _SkipPark()
+
+        for seg in _park_path(cur):
+            goal = {k: seg.get(k, cur[k]) for k in cur}
+            n = max(int(T * 50), 1)
+            for k in range(1, n + 1):
+                a = min_jerk(k / n)
+                step_pose = {key: cur[key] + a * (goal[key] - cur[key]) for key in cur}
+                if is_leader:
+                    for pfx, arm in arms:
+                        gc = getattr(arm, "_gc", None)
+                        if gc is not None and gc.error is None:
+                            gc.set_target({
+                                key[len(pfx):].removesuffix(".pos"): v
+                                for key, v in step_pose.items()
+                                if key.startswith(pfx)
+                            })
+                else:
+                    self.send_action(step_pose)
+                time.sleep(T / n)
+            cur = goal
+
+        time.sleep(0.3)
+        for _, arm in arms:
+            arm._parked = True
+    except _SkipPark:
+        pass
+    except Exception as e:  # noqa: BLE001
+        for _, arm in arms:
+            arm._parked = True
+        logger.warning(f"[gc] 回位失敗 ({e}) — 直接關閉力矩")
+
+    # 左右各自關：一支出錯不會讓另一支被跳過
+    for _, arm in arms:
+        if not bus_connected(arm):
+            continue
+        try:
+            arm.disconnect()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[gc] {arm}: 中斷連線出錯 ({e})")
+            safe_disable(arm)
+
 def patch_follower_park():
     global _FOLLOWER_PATCHED
     if _FOLLOWER_PATCHED:
@@ -119,6 +190,7 @@ def patch_follower_park():
     def connect(self, *a, **k):
         orig_conn(self, *a, **k)
         register_arm(self)
+        self._parked = False
 
     def disconnect(self):
         if (
@@ -142,45 +214,9 @@ def patch_follower_park():
         finally:
             unregister_arm(self)
 
-    def bi_disconnect(self):
-        # 兩支同時回下垂，而不是左手先回完才輪到右手
-        arms = [("left_", self.left_arm), ("right_", self.right_arm)]
-        try:
-            if not park_on:
-                raise _SkipPark()
-            logger.info("[gc] 正在將雙從臂回位至下垂姿態...")
-            T = float(os.environ.get("OPENARM_PARK_TIME", "3"))
-            cur = {}
-            for pfx, arm in arms:
-                for m, v in arm.bus.sync_read("Present_Position").items():
-                    cur[f"{pfx}{m}.pos"] = float(v)
-            for seg in _park_path(cur):
-                goal = {k: seg.get(k, cur[k]) for k in cur}
-                n = max(int(T * 50), 1)
-                for k in range(1, n + 1):
-                    a = min_jerk(k / n)
-                    self.send_action({key: cur[key] + a * (goal[key] - cur[key]) for key in cur})
-                    time.sleep(T / n)
-                cur = goal
-            for _, arm in arms:
-                arm._parked = True
-        except _SkipPark:
-            pass
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"[gc] 回位失敗 ({e}) — 直接關閉力矩")
-        # 左右各自關：一支出錯不會讓另一支被跳過
-        for _, arm in arms:
-            if not bus_connected(arm):
-                continue
-            try:
-                arm.disconnect()
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"[gc] {arm}: 中斷連線出錯 ({e})")
-                safe_disable(arm)
-
     OpenArmFollower.connect = connect
     OpenArmFollower.disconnect = disconnect
-    BiOpenArmFollower.disconnect = bi_disconnect
+    BiOpenArmFollower.disconnect = bimanual_disconnect
 
 
 def install_patches():
@@ -204,6 +240,7 @@ def install_patches():
         # 注意：LeRobot 每次 connect 都會把「當下姿態」設為零點，所以啟動時 leader 必須自然下垂！
         orig_connect(self, calibrate)
         register_arm(self)
+        self._parked = False
         side = getattr(self, "_gc_side", None) or os.environ.get("OPENARM_LEADER_SIDE")
         self._gc = LeaderGC(self, side)
         self._gc.start()
@@ -228,11 +265,13 @@ def install_patches():
     def disconnect(self):
         gc = getattr(self, "_gc", None)
         if gc is not None:
-            if gc.error is None:
+            park_on = os.environ.get("OPENARM_PARK", "1") != "0"
+            if gc.error is None and park_on and not getattr(self, "_parked", False):
                 # 先慢慢垂回零點 (重力中性姿態)，再關力矩，避免手臂直接摔下
                 try:
                     logger.info(f"[gc] {self}: 關閉力矩前先回到下垂姿態")
-                    gc.move_to({m: 0.0 for m in ARM_JOINTS}, 3.0)
+                    T = float(os.environ.get("OPENARM_PARK_TIME", "3"))
+                    gc.move_to({m: 0.0 for m in ARM_JOINTS}, T)
                     time.sleep(0.3)
                 except Exception as e:  # noqa: BLE001
                     logger.warning(f"[gc] {self}: 回下垂失敗 ({e})")
@@ -244,17 +283,6 @@ def install_patches():
             logger.warning(f"[gc] {self}: 中斷連線出錯 ({e})，再補送關閉力矩指令")
             safe_disable(self)
         unregister_arm(self)
-
-    def bi_disconnect(self):
-        # 左右各自關：一支出錯不會讓另一支被跳過
-        for arm in (self.left_arm, self.right_arm):
-            if not bus_connected(arm):
-                continue
-            try:
-                arm.disconnect()
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"[gc] {arm}: 中斷連線出錯 ({e})")
-                safe_disable(arm)
 
     def send_feedback(self, feedback):
         gc = getattr(self, "_gc", None)
@@ -274,7 +302,7 @@ def install_patches():
             gc.set_target(goals)
 
     BiOpenArmLeader.__init__ = bi_init
-    BiOpenArmLeader.disconnect = bi_disconnect
+    BiOpenArmLeader.disconnect = bimanual_disconnect
     patch_follower_park()
     OpenArmLeader.connect = connect
     OpenArmLeader.get_action = get_action

@@ -37,6 +37,7 @@ from openarm_src.utils.homing import (
 )
 from openarm_src.utils.leader_controller import LeaderGC
 from openarm_src.utils.patches import (
+    bimanual_disconnect,
     bind_force_feedback,
     follower_park,
     install_patches,
@@ -77,6 +78,7 @@ __all__ = [
     "STATS_PERIOD",
     "TAU_LIMIT",
     "TableGuard",
+    "bimanual_disconnect",
     "bus_connected",
     "can_setup_and_check",
     "can_teardown",
