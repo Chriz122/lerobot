@@ -68,6 +68,138 @@ def bind_force_feedback(robot, teleop) -> None:
         abs(float(os.environ.get("OPENARM_FF_LIMIT", DEFAULT_FORCE_FEEDBACK_LIMIT))),
     )
 
+DAMIAO_ERROR_CODES: dict[int, str] = {
+    0x8: "過壓保護 (Over Voltage - 電壓異常突增)",
+    0x9: "欠壓保護 (Under Voltage - 電源接觸不良或電壓過低)",
+    0xA: "過流保護 (Over Current - 機械卡死/堵轉或電流過大)",
+    0xB: "MOS過溫保護 (MOS Over Temp - 驅動板過熱)",
+    0xC: "線圈過溫保護 (Coil Over Temp - 馬達線圈過熱)",
+    0xD: "通訊丟失保護 (Communication Lost - CAN 線拉扯瞬斷或超時)",
+    0xE: "過載保護 (Overload - 長時間超負荷或堵轉)",
+}
+
+_MONITOR_PATCHED = False
+
+
+def patch_gripper_monitor():
+    """監控夾爪馬達的硬體狀態碼、CAN 通訊中斷、行程限制裁切與手腕姿態，精確診斷特定角度斷線閃紅燈。"""
+    global _MONITOR_PATCHED
+    if _MONITOR_PATCHED:
+        return
+    _MONITOR_PATCHED = True
+
+    from lerobot.motors.damiao.damiao import DamiaoMotorsBus
+    from lerobot.robots.openarm_follower import OpenArmFollower
+
+    orig_process_resp = DamiaoMotorsBus._process_response
+    orig_mit_batch = DamiaoMotorsBus._mit_control_batch
+    orig_send_action = OpenArmFollower.send_action
+
+    _last_warn_time: dict[tuple[str, str], float] = {}
+    _missing_tracker: dict[tuple[str, str], int] = {}
+
+    def wrapped_process_response(self, motor: str, msg):
+        if hasattr(msg, "data") and len(msg.data) >= 8:
+            err_code = msg.data[0] & 0x0F
+            if not hasattr(self, "_last_err_codes"):
+                self._last_err_codes = {}
+            self._last_err_codes[motor] = err_code
+
+            if not hasattr(self, "_last_recv_time"):
+                self._last_recv_time = {}
+            self._last_recv_time[motor] = time.perf_counter()
+
+            if err_code in DAMIAO_ERROR_CODES:
+                port = getattr(self, "port", "can")
+                key = (port, f"{motor}_err_{err_code}")
+                now = time.perf_counter()
+                if now - _last_warn_time.get(key, 0.0) >= 1.0:
+                    _last_warn_time[key] = now
+                    states = getattr(self, "_last_known_states", {})
+                    j5 = states.get("joint_5", {}).get("position", 0.0)
+                    j6 = states.get("joint_6", {}).get("position", 0.0)
+                    j7 = states.get("joint_7", {}).get("position", 0.0)
+                    g_pos = states.get(motor, {}).get("position", 0.0)
+                    t_mos = msg.data[6]
+                    t_rot = msg.data[7]
+                    desc = DAMIAO_ERROR_CODES[err_code]
+                    logger.error(
+                        f"[馬達硬體故障] {port}/{motor} 達妙馬達報錯閃紅燈！"
+                        f"狀態碼 0x{err_code:X}: {desc} | "
+                        f"手腕當前姿態: J5={j5:.1f}°, J6={j6:.1f}°, J7={j7:.1f}°, Gripper={g_pos:.1f}° | "
+                        f"MOS溫={t_mos}°C, 線圈溫={t_rot}°C"
+                    )
+
+        return orig_process_resp(self, motor, msg)
+
+    def wrapped_mit_control_batch(self, commands):
+        if not commands or self.canbus is None:
+            return orig_mit_batch(self, commands)
+
+        orig_mit_batch(self, commands)
+
+        now = time.perf_counter()
+        port = getattr(self, "port", "can")
+        last_times = getattr(self, "_last_recv_time", {})
+
+        for motor in commands:
+            motor_name = self._get_motor_name(motor)
+            if motor_name != "gripper":
+                continue
+
+            last_t = last_times.get(motor_name)
+            key = (port, motor_name)
+            if last_t is None or (now - last_t > 0.15):
+                count = _missing_tracker.get(key, 0) + 1
+                _missing_tracker[key] = count
+                if count >= 3:
+                    warn_t = _last_warn_time.get(key, 0.0)
+                    if now - warn_t >= 1.0:
+                        _last_warn_time[key] = now
+                        states = getattr(self, "_last_known_states", {})
+                        j5 = states.get("joint_5", {}).get("position", 0.0)
+                        j6 = states.get("joint_6", {}).get("position", 0.0)
+                        j7 = states.get("joint_7", {}).get("position", 0.0)
+                        g_pos = states.get("gripper", {}).get("position", 0.0)
+                        dt_ms = (now - last_t) * 1000 if last_t else 0.0
+                        logger.warning(
+                            f"[夾爪通訊中斷] {port}/{motor_name} 遺失 CAN 回應 (已持續 {dt_ms:.0f}ms)！馬達可能斷電或斷線！"
+                            f"手腕當前姿態: J5={j5:.1f}°, J6={j6:.1f}°, J7={j7:.1f}°, 夾爪={g_pos:.1f}° | "
+                            f"請特別檢查手腕在此角度下，末端排線是否被拉扯或接頭鬆脫！"
+                        )
+            else:
+                if _missing_tracker.get(key, 0) >= 3:
+                    logger.info(f"[夾爪通訊恢復] {port}/{motor_name} CAN 通訊已恢復正常。")
+                _missing_tracker[key] = 0
+
+    def wrapped_send_action(self, action, *args, **kwargs):
+        if "gripper.pos" in action and "gripper" in self.config.joint_limits:
+            target_g = float(action["gripper.pos"])
+            min_lim, max_lim = self.config.joint_limits["gripper"]
+            if target_g < min_lim or target_g > max_lim:
+                port = getattr(self, "port", "follower")
+                key = (port, "gripper_clip")
+                now = time.perf_counter()
+                if now - _last_warn_time.get(key, 0.0) >= 1.0:
+                    _last_warn_time[key] = now
+                    clipped = max(min_lim, min(max_lim, target_g))
+                    states = getattr(self.bus, "_last_known_states", {})
+                    j5 = states.get("joint_5", {}).get("position", 0.0)
+                    j6 = states.get("joint_6", {}).get("position", 0.0)
+                    j7 = states.get("joint_7", {}).get("position", 0.0)
+                    logger.warning(
+                        f"[夾爪限位告警] {self}: 目標角度 {target_g:.1f}° 超出軟體行程限制 [{min_lim:.1f}°, {max_lim:.1f}°]，已被限制為 {clipped:.1f}°！"
+                        f"手腕姿態: J5={j5:.1f}°, J6={j6:.1f}°, J7={j7:.1f}° | "
+                        f"若機械已到物理死點仍持續施壓，馬達會因堵轉過流 (0xA) 觸發閃紅燈斷線保護！"
+                    )
+
+        return orig_send_action(self, action, *args, **kwargs)
+
+    DamiaoMotorsBus._process_response = wrapped_process_response
+    DamiaoMotorsBus._mit_control_batch = wrapped_mit_control_batch
+    OpenArmFollower.send_action = wrapped_send_action
+    logger.info("[gc] 夾爪與手腕硬體診斷 Logger 已啟用 (即時監控排線拉扯、CAN丟包、達妙錯誤碼與限位堵轉)")
+
 _FOLLOWER_PATCHED = False
 
 
@@ -176,6 +308,7 @@ def bimanual_disconnect(self):
             safe_disable(arm)
 
 def patch_follower_park():
+    patch_gripper_monitor()
     global _FOLLOWER_PATCHED
     if _FOLLOWER_PATCHED:
         return
@@ -220,6 +353,7 @@ def patch_follower_park():
 
 
 def install_patches():
+    patch_gripper_monitor()
     from lerobot.teleoperators.bi_openarm_leader import BiOpenArmLeader
     from lerobot.teleoperators.openarm_leader import OpenArmLeader
 
