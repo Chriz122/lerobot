@@ -1030,7 +1030,7 @@ class WebRTCStreamer:
 
             # 下排：全景相機 (ego) 水平置中於畫面下方
             bot_img = processed[2][1]
-            bot_w = bot_img.shape[1]修化
+            bot_w = bot_img.shape[1]
 
             bot_row = np.zeros((row_h, top_w, 3), dtype=np.uint8)
             bot_row[:] = (15, 23, 42)  # 與 Web UI 暗黑背景底色一致
