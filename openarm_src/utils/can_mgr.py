@@ -145,5 +145,6 @@ def can_teardown():
         r = subprocess.run(["ip", "link", "set", iface, "down"], capture_output=True, text=True)
         if r.returncode != 0:
             r = subprocess.run(["sudo", "-n", "ip", "link", "set", iface, "down"], capture_output=True, text=True)
-        logger.info(f"[can] {iface} down" + ("" if r.returncode == 0 else f" 失敗：{r.stderr.strip()}"))
+        status = "已關閉" if r.returncode == 0 else f"關閉失敗：{r.stderr.strip()}"
+        logger.info(f"[can] {iface} {status}")
 

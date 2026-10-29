@@ -53,16 +53,16 @@ def bind_force_feedback(robot, teleop) -> None:
         bindings.append((teleop._gc_side, teleop, robot))
 
     if not bindings:
-        logger.warning("[gc] force feedback enabled but no leader/follower arm pair was found")
+        logger.warning("[gc] 已啟用力回饋，但未找到對應的主臂/從臂配對")
         return
     for side, leader, follower in bindings:
         gc = getattr(leader, "_gc", None)
         if gc is None:
-            logger.warning("[gc] force feedback skipped for %s: leader controller is not active", side)
+            logger.warning("[gc] %s 略過力回饋：主臂控制器未處於啟用狀態", side)
             continue
         gc.set_feedback_source(follower)
     logger.info(
-        "[gc] force feedback ON (scale=%.3g, sign=%+.0f, limit=%.3g Nm)",
+        "[gc] 力回饋已開啟 (比例=%.3g, 正負號=%+.0f, 上限=%.3g Nm)",
         ff_scale,
         float(os.environ.get("OPENARM_FF_SIGN", "-1.0")),
         abs(float(os.environ.get("OPENARM_FF_LIMIT", DEFAULT_FORCE_FEEDBACK_LIMIT))),
@@ -128,16 +128,16 @@ def patch_follower_park():
             and not getattr(self, "_parked", False)
         ):
             try:
-                logger.info(f"[gc] {self}: parking to hanging pose before disabling torque")
+                logger.info(f"[gc] {self}: 關閉力矩前先回到下垂姿態")
                 follower_park(self, getattr(self, "_park_prefix", ""))
             except Exception as e:  # noqa: BLE001
-                logger.warning(f"[gc] park failed ({e}) — disabling torque directly")
+                logger.warning(f"[gc] 回位失敗 ({e}) — 直接關閉力矩")
         if self.config.disable_torque_on_disconnect:
             safe_disable(self)
         try:
             return orig_disc(self)
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"[gc] {self}: disconnect 出錯 ({e})，再補送 disable")
+            logger.warning(f"[gc] {self}: 中斷連線出錯 ({e})，再補送關閉力矩指令")
             safe_disable(self)
         finally:
             unregister_arm(self)
@@ -148,7 +148,7 @@ def patch_follower_park():
         try:
             if not park_on:
                 raise _SkipPark()
-            logger.info("[gc] parking both follower arms to hanging pose ...")
+            logger.info("[gc] 正在將雙從臂回位至下垂姿態...")
             T = float(os.environ.get("OPENARM_PARK_TIME", "3"))
             cur = {}
             for pfx, arm in arms:
@@ -167,7 +167,7 @@ def patch_follower_park():
         except _SkipPark:
             pass
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"[gc] park failed ({e}) — disabling torque directly")
+            logger.warning(f"[gc] 回位失敗 ({e}) — 直接關閉力矩")
         # 左右各自關：一支出錯不會讓另一支被跳過
         for _, arm in arms:
             if not bus_connected(arm):
@@ -175,7 +175,7 @@ def patch_follower_park():
             try:
                 arm.disconnect()
             except Exception as e:  # noqa: BLE001
-                logger.warning(f"[gc] {arm}: disconnect 出錯 ({e})")
+                logger.warning(f"[gc] {arm}: 中斷連線出錯 ({e})")
                 safe_disable(arm)
 
     OpenArmFollower.connect = connect
@@ -207,7 +207,7 @@ def install_patches():
         side = getattr(self, "_gc_side", None) or os.environ.get("OPENARM_LEADER_SIDE")
         self._gc = LeaderGC(self, side)
         self._gc.start()
-        logger.info(f"[gc] {self} gravity compensation ON (side={side})")
+        logger.info(f"[gc] {self} 重力補償已開啟 (側別={side})")
 
     def get_action(self):
         gc = getattr(self, "_gc", None)
@@ -231,7 +231,7 @@ def install_patches():
             if gc.error is None:
                 # 先慢慢垂回零點 (重力中性姿態)，再關力矩，避免手臂直接摔下
                 try:
-                    logger.info(f"[gc] {self}: returning to hanging pose before disabling torque")
+                    logger.info(f"[gc] {self}: 關閉力矩前先回到下垂姿態")
                     gc.move_to({m: 0.0 for m in ARM_JOINTS}, 3.0)
                     time.sleep(0.3)
                 except Exception as e:  # noqa: BLE001
@@ -241,7 +241,7 @@ def install_patches():
         try:
             orig_disconnect(self)
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"[gc] {self}: disconnect 出錯 ({e})，再補送 disable")
+            logger.warning(f"[gc] {self}: 中斷連線出錯 ({e})，再補送關閉力矩指令")
             safe_disable(self)
         unregister_arm(self)
 
@@ -253,7 +253,7 @@ def install_patches():
             try:
                 arm.disconnect()
             except Exception as e:  # noqa: BLE001
-                logger.warning(f"[gc] {arm}: disconnect 出錯 ({e})")
+                logger.warning(f"[gc] {arm}: 中斷連線出錯 ({e})")
                 safe_disable(arm)
 
     def send_feedback(self, feedback):

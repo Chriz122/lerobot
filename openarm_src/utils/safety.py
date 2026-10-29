@@ -39,7 +39,7 @@ def safe_disable(arm, label: str = ""):
         try:
             arm.bus.disable_torque()
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"[safe] {label or arm}: disable_torque 第 {i + 1} 次失敗 ({e})")
+            logger.warning(f"[safe] {label or arm}: 關閉力矩第 {i + 1} 次失敗 ({e})")
         time.sleep(0.05)
 
 

@@ -83,7 +83,7 @@ class LeaderGC:
                 except Exception as e:  # noqa: BLE001
                     last_error = e
                     logger.warning(
-                        f"[gc] {self.bus.port}/{motor}: enable torque 第 {attempt}/{ENABLE_RETRY} 次失敗 ({e})"
+                        f"[gc] {self.bus.port}/{motor}: 啟動力矩第 {attempt}/{ENABLE_RETRY} 次失敗 ({e})"
                     )
                     time.sleep(0.05)
             if not enabled:
@@ -93,10 +93,10 @@ class LeaderGC:
             try:
                 self.bus.disable_torque(num_retry=DISABLE_RETRY)
             except Exception as e:  # noqa: BLE001
-                logger.warning(f"[gc] enable 失敗後關閉 torque 也失敗 ({e})")
+                logger.warning(f"[gc] 啟用失敗後關閉力矩也失敗 ({e})")
             raise ConnectionError("Torque enable failed: " + "; ".join(failed))
 
-        logger.info(f"[gc] torque enabled: {self.bus.port} ({len(self.bus.motors)} motors)")
+        logger.info(f"[gc] 力矩已啟用: {self.bus.port} ({len(self.bus.motors)} 顆馬達)")
         self._thread = threading.Thread(target=self._run, daemon=True, name=f"gc-{self.gm.side}")
         self._thread.start()
 
@@ -118,18 +118,18 @@ class LeaderGC:
             states = follower.bus.sync_read_all_states([GRIPPER])
             missing = [m for m in (GRIPPER,) if m not in states or "torque" not in states[m]]
         except Exception as e:  # noqa: BLE001
-            logger.warning("[gc] %s: unable to read follower torque for force feedback: %s", self.gm.side, e)
+            logger.warning("[gc] %s: 無法讀取從臂力矩以進行力回饋: %s", self.gm.side, e)
             return
         if missing:
             logger.warning(
-                "[gc] %s: force feedback unavailable; follower torque missing for %s",
+                "[gc] %s: 力回饋不可用；從臂缺少 %s 的力矩資料",
                 self.gm.side,
                 ", ".join(missing),
             )
             return
         with self.lock:
             self.feedback_source = follower if self.ff_scale > 0 else None
-        logger.info("[gc] %s: follower gripper torque source bound", self.gm.side)
+        logger.info("[gc] %s: 已綁定從臂夾爪力矩來源", self.gm.side)
 
     def _force_feedback(self, follower) -> float:
         if follower is None or self.ff_scale <= 0:
@@ -246,18 +246,18 @@ class LeaderGC:
                     if now - st_t0 >= STATS_PERIOD:
                         extra_ff = ""
                         if self.feedback_samples > 0:
-                            extra_ff = f" | FF raw {self.external_max:5.2f} Nm -> cmd {self.feedback_max:5.2f} Nm, samples {self.feedback_samples}"
+                            extra_ff = f" | 力回饋 原始 {self.external_max:5.2f} Nm -> 指令 {self.feedback_max:5.2f} Nm, 取樣數 {self.feedback_samples}"
                         logger.info(
-                            f"[gc-stats] {self.gm.side:5s} loop {st_n / (now - st_t0):5.0f} Hz (目標 {self.hz:.0f})"
-                            f" | CAN 往返 avg {1e3 * st_bus_sum / st_n:5.2f} ms, max {1e3 * st_bus_max:5.2f} ms"
-                            f" | 單次運算+通訊 max {1e3 * st_cyc_max:5.2f} ms | 超時 {st_over}/{st_n}"
+                            f"[gc-stats] {self.gm.side:5s} 迴圈 {st_n / (now - st_t0):5.0f} Hz (目標 {self.hz:.0f})"
+                            f" | CAN 往返 平均 {1e3 * st_bus_sum / st_n:5.2f} ms, 最大 {1e3 * st_bus_max:5.2f} ms"
+                            f" | 單次運算+通訊 最大 {1e3 * st_cyc_max:5.2f} ms | 超時 {st_over}/{st_n}"
                             f"{extra_ff}"
                         )
                         st_t0, st_n, st_over = now, 0, 0
                         st_bus_sum, st_bus_max, st_cyc_max = 0.0, 0.0, 0.0
         except Exception as e:  # noqa: BLE001
             self.error = e
-            logger.exception(f"[gc] control thread crashed — disabling torque on {self.bus.port}")
+            logger.exception(f"[gc] 控制執行緒崩潰 — 正在關閉 {self.bus.port} 的力矩")
             try:
                 self.bus.disable_torque()
             except Exception:  # noqa: BLE001

@@ -48,7 +48,7 @@ class LoopProfiler:
             for lb in ("obs", "teleop", "send"):
                 if lb in self.d:
                     n, s, m = self.d[lb]
-                    parts.append(f"{lb} avg {1e3 * s / n:6.1f} ms max {1e3 * m:6.1f} ms")
+                    parts.append(f"{lb} 平均 {1e3 * s / n:6.1f} ms 最大 {1e3 * m:6.1f} ms")
             logger.info("[loop-stats] " + " | ".join(parts))
             self.t0, self.d = now, {}
 

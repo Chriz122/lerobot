@@ -111,7 +111,7 @@ def go_home(robot, teleop, waypoints: list[dict[str, float]], duration: float, g
         input("⚠ homing 可能撞桌，已取消。請用 leader 把手臂移到安全位置，再按 Enter 重試...")
         return go_home(robot, teleop, waypoints, duration, guard)
 
-    logger.info(f"[gc] moving to start pose via {len(waypoints)} waypoint(s) ...")
+    logger.info(f"[gc] 正在通過 {len(waypoints)} 個路徑點移動至起始姿態...")
     for f_cmd, l_cmd in plan:
         robot.send_action(f_cmd)
         for prefix, leader in leaders:
@@ -123,7 +123,7 @@ def go_home(robot, teleop, waypoints: list[dict[str, float]], duration: float, g
     time.sleep(0.3)
     for _, leader in leaders:
         leader._gc.set_target(None)  # 放開 -> 回到重力補償
-    logger.info("[gc] at start pose — released leader, recording starts")
+    logger.info("[gc] 已到達起始姿態 — 已釋放主臂，開始記錄")
 
 
 def load_home_config():

@@ -144,10 +144,10 @@ def parse_bilateral_flag(args: list[str]) -> tuple[bool, list[str]]:
             cur_scale = float(os.environ.get("OPENARM_FF_SCALE", "0.05"))
             target_scale = "0.05" if cur_scale <= 0 else str(cur_scale)
             os.environ["OPENARM_FF_SCALE"] = target_scale
-            logger.info("[gc] bilateral mode enabled (--bilateral=true), FF_SCALE=%s", os.environ["OPENARM_FF_SCALE"])
+            logger.info("[gc] 雙向力回饋模式已啟用 (--bilateral=true)，FF_SCALE=%s", os.environ["OPENARM_FF_SCALE"])
         else:
             os.environ["OPENARM_FF_SCALE"] = "0"
-            logger.info("[gc] bilateral mode disabled (--bilateral=false)")
+            logger.info("[gc] 雙向力回饋模式已停用 (--bilateral=false)")
 
     return bool(bilateral), cleaned
 

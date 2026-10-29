@@ -34,7 +34,7 @@ class GravityModel:
         self.q_idx = [self.model.idx_qs[j] for j in jids]
         self.v_idx = [self.model.idx_vs[j] for j in jids]
         self.sign = np.array(JOINT_SIGN.get(self.side, [1] * 7), dtype=float)
-        logger.info(f"[gc] {side}: using URDF joints {names}")
+        logger.info(f"[gc] {side}: 使用 URDF 關節 {names}")
 
     def torque(self, q_deg: np.ndarray) -> np.ndarray:
         """q_deg: LeRobot 角度 (7,) -> 需要送給馬達的重力補償力矩 (Nm, 7)"""
