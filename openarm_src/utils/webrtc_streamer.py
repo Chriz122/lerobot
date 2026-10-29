@@ -982,26 +982,70 @@ class WebRTCStreamer:
         return images
 
     def _create_mosaic(self, images: dict[str, np.ndarray], target_h: int = 480) -> np.ndarray:
-        """將多台相機影像合成為單一低頻寬高清晰拼貼畫布。"""
-        items = list(images.items())
+        """將多台相機影像合成為單一低頻寬高清晰拼貼畫布。
+
+        排版邏輯：
+        - 1 台相機：直接顯示全畫面
+        - 2 台相機：左邊 (left) 與 右邊 (right) 水平並排
+        - 3 台相機：上排為左腕 (wright_left / wrist_left) 與 右腕 (wright_right / wrist_right)，下排置中顯示主相機 (ego)
+        - 4 台以上：2x2 或多行網格排列
+        """
+        if not images:
+            return self._placeholder_frame
+
+        # 智慧排序相機：左臂相機最前(0)、右臂相機次之(1)、其他相機(2)、全景/主視角(ego)置底(3)
+        def cam_sort_key(item: tuple[str, np.ndarray]) -> tuple[int, str]:
+            name = item[0].lower()
+            if "left" in name or name.endswith("_l"):
+                return (0, item[0])
+            elif "right" in name or name.endswith("_r"):
+                return (1, item[0])
+            elif any(k in name for k in ("ego", "center", "main", "front", "top", "overhead")):
+                return (3, item[0])
+            return (2, item[0])
+
+        sorted_items = sorted(images.items(), key=cam_sort_key)
+
+        # 3台或以上相機時，單列基準高度設為 360，雙列拼接後剛好為 720p (720px) 高度
+        row_h = 360 if len(sorted_items) >= 3 else target_h
+
         processed = []
-        for name, img in items:
+        for name, img in sorted_items:
             h, w = img.shape[:2]
-            new_w = int(w * (target_h / h))
-            resized = cv2.resize(img, (new_w, target_h), interpolation=cv2.INTER_LINEAR)
+            new_w = int(w * (row_h / h))
+            resized = cv2.resize(img, (new_w, row_h), interpolation=cv2.INTER_LINEAR)
             # 加上相機名稱浮水印 Badge
             cv2.putText(resized, f"[{name}]", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 3)
             cv2.putText(resized, f"[{name}]", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 230, 255), 2)
-            processed.append(resized)
+            processed.append((name, resized))
 
         if len(processed) == 1:
-            mosaic = processed[0]
+            mosaic = processed[0][1]
         elif len(processed) == 2:
-            mosaic = np.hstack(processed)
+            mosaic = np.hstack([p[1] for p in processed])
+        elif len(processed) == 3:
+            # 上排：左手與右手腕相機 (wright_left / wrist_left, wright_right / wrist_right)
+            top_row = np.hstack([processed[0][1], processed[1][1]])
+            top_w = top_row.shape[1]
+
+            # 下排：全景相機 (ego) 水平置中於畫面下方
+            bot_img = processed[2][1]
+            bot_w = bot_img.shape[1]修化
+
+            bot_row = np.zeros((row_h, top_w, 3), dtype=np.uint8)
+            bot_row[:] = (15, 23, 42)  # 與 Web UI 暗黑背景底色一致
+
+            if bot_w <= top_w:
+                x_offset = (top_w - bot_w) // 2
+                bot_row[:, x_offset : x_offset + bot_w] = bot_img
+            else:
+                bot_row = cv2.resize(bot_img, (top_w, row_h), interpolation=cv2.INTER_AREA)
+
+            mosaic = np.vstack([top_row, bot_row])
         else:
             mid = (len(processed) + 1) // 2
-            row1 = np.hstack(processed[:mid])
-            row2 = np.hstack(processed[mid:])
+            row1 = np.hstack([p[1] for p in processed[:mid]])
+            row2 = np.hstack([p[1] for p in processed[mid:]])
             if row1.shape[1] != row2.shape[1]:
                 row2 = cv2.resize(row2, (row1.shape[1], row2.shape[0]))
             mosaic = np.vstack([row1, row2])
