@@ -63,37 +63,38 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     --accent-green: #22c55e;
     --accent-yellow: #eab308;
     --accent-red: #ef4444;
-    --accent-purple: #a855f7;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
+  html, body {
+    height: 100vh;
+    max-height: 100vh;
+    overflow: hidden; /* 單頁無捲軸 */
     background-color: var(--bg-dark);
     color: var(--text-primary);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    padding: 16px;
-    min-height: 100vh;
+    padding: 6px 10px;
+    display: flex;
+    flex-direction: column;
   }
   header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 12px 20px;
+    padding: 6px 14px;
     background: var(--card-bg);
     border: 1px solid var(--card-border);
-    border-radius: 12px;
-    margin-bottom: 16px;
+    border-radius: 8px;
+    gap: 12px;
+    flex-shrink: 0;
   }
-  .title-group { display: flex; align-items: center; gap: 12px; }
-  .title-group h1 { font-size: 1.25rem; font-weight: 700; color: var(--accent-blue); }
-  .header-badges { display: flex; align-items: center; gap: 10px; }
+  .header-left { display: flex; align-items: center; gap: 8px; }
+  .logo { font-size: 1.05rem; font-weight: 700; color: var(--accent-blue); white-space: nowrap; }
   .badge {
-    padding: 4px 10px;
+    padding: 2px 8px;
     border-radius: 9999px;
-    font-size: 0.75rem;
+    font-size: 0.72rem;
     font-weight: 600;
-    display: flex;
-    align-items: center;
-    gap: 6px;
+    white-space: nowrap;
   }
   .badge-connected { background: rgba(34, 197, 94, 0.15); color: var(--accent-green); border: 1px solid var(--accent-green); }
   .badge-disconnected { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); border: 1px solid var(--accent-red); }
@@ -101,46 +102,72 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .badge-standby { background: rgba(148, 163, 184, 0.15); color: var(--text-secondary); border: 1px solid var(--card-border); }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
-  /* 延遲指標卡片區 */
-  .metrics-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-    gap: 12px;
-    margin-bottom: 16px;
+  /* 頂部整合指標區 */
+  .metrics-bar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex: 1;
+    justify-content: center;
   }
-  .metric-card {
-    background: var(--card-bg);
+  .metric-item {
+    display: flex;
+    align-items: baseline;
+    gap: 5px;
+    padding: 3px 10px;
+    background: rgba(15, 23, 42, 0.6);
     border: 1px solid var(--card-border);
-    border-radius: 12px;
-    padding: 14px 18px;
-    position: relative;
-    overflow: hidden;
+    border-radius: 6px;
   }
-  .metric-label { font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
-  .metric-value { font-size: 1.8rem; font-weight: 700; font-family: monospace; color: var(--text-primary); }
-  .metric-sub { font-size: 0.72rem; color: var(--text-secondary); margin-top: 4px; }
+  .m-label { font-size: 0.7rem; color: var(--text-secondary); white-space: nowrap; }
+  .m-val { font-size: 1.05rem; font-weight: 700; font-family: monospace; color: var(--text-primary); }
+  .m-sub { font-size: 0.68rem; color: var(--text-secondary); }
   .val-good { color: var(--accent-green) !important; }
   .val-warn { color: var(--accent-yellow) !important; }
   .val-bad { color: var(--accent-red) !important; }
 
-  /* 主內容區：左邊視訊與圖表，右邊手臂狀態 */
-  .main-layout {
-    display: grid;
-    grid-template-columns: 1fr 340px;
-    gap: 16px;
+  .btn-reconnect {
+    background: #2563eb;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.2s;
   }
-  @media (max-width: 992px) {
+  .btn-reconnect:hover { background: #1d4ed8; }
+
+  /* 主內容雙欄佈局 (100% 填滿視窗，永不超出) */
+  .main-layout {
+    flex: 1;
+    min-height: 0; /* 防止子元素撐破 flex 容器 */
+    display: grid;
+    grid-template-columns: 1fr 330px;
+    gap: 8px;
+    margin-top: 6px;
+  }
+  @media (max-width: 900px) {
     .main-layout { grid-template-columns: 1fr; }
   }
 
-  /* 影像播放器容器 */
+  .left-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+
   .video-container {
+    flex: 1;
+    min-height: 0;
     background: #000;
     border: 1px solid var(--card-border);
-    border-radius: 12px;
+    border-radius: 8px;
     overflow: hidden;
     position: relative;
-    aspect-ratio: 16 / 9;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -153,70 +180,79 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
   .video-hud {
     position: absolute;
-    top: 12px;
-    left: 12px;
+    top: 8px;
+    left: 8px;
     background: rgba(15, 23, 42, 0.75);
-    backdrop-filter: blur(6px);
+    backdrop-filter: blur(4px);
     border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
-    padding: 6px 12px;
-    font-size: 0.75rem;
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 0.72rem;
     font-family: monospace;
     display: flex;
-    gap: 12px;
-    align-items: center;
+    gap: 8px;
     pointer-events: none;
   }
   .hud-badge { color: var(--accent-blue); font-weight: 600; }
 
-  /* 圖表卡片 */
-  .chart-card {
+  .chart-bar {
+    height: 46px;
     background: var(--card-bg);
     border: 1px solid var(--card-border);
-    border-radius: 12px;
-    padding: 12px 16px;
-    margin-top: 12px;
+    border-radius: 6px;
+    padding: 3px 8px;
+    margin-top: 6px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
   }
   .chart-header {
     display: flex;
     justify-content: space-between;
-    align-items: center;
-    margin-bottom: 8px;
-    font-size: 0.8rem;
+    font-size: 0.68rem;
     color: var(--text-secondary);
+    margin-bottom: 2px;
   }
   canvas#latencyChart {
     width: 100%;
-    height: 70px;
+    height: 24px;
     display: block;
   }
 
-  /* 機械手臂狀態側邊欄 */
+  /* 右側手臂監控面板 */
   .telemetry-sidebar {
+    height: 100%;
+    min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 6px;
   }
   .arm-card {
+    flex: 1;
+    min-height: 0;
     background: var(--card-bg);
     border: 1px solid var(--card-border);
-    border-radius: 12px;
-    padding: 14px;
+    border-radius: 8px;
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
   }
   .arm-title {
-    font-size: 0.88rem;
-    font-weight: 600;
+    font-size: 0.8rem;
+    font-weight: 700;
     color: var(--accent-blue);
-    margin-bottom: 10px;
     display: flex;
     justify-content: space-between;
     align-items: center;
     border-bottom: 1px solid var(--card-border);
-    padding-bottom: 6px;
+    padding-bottom: 3px;
+    margin-bottom: 3px;
   }
   .joint-table {
     width: 100%;
-    font-size: 0.75rem;
+    font-size: 0.72rem;
     font-family: monospace;
     border-collapse: collapse;
   }
@@ -224,20 +260,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     text-align: left;
     color: var(--text-secondary);
     font-weight: 500;
-    padding-bottom: 4px;
+    padding-bottom: 2px;
   }
   .joint-table td {
-    padding: 3px 0;
+    padding: 1.5px 0;
   }
-  .val-tgt { color: var(--text-secondary); font-size: 0.7rem; }
+  .val-tgt { color: var(--text-secondary); font-size: 0.68rem; }
+  .gripper-section { margin-top: 4px; }
   .gripper-bar-container {
-    margin-top: 8px;
     background: #0f172a;
-    border-radius: 6px;
-    height: 12px;
+    border-radius: 4px;
+    height: 8px;
     overflow: hidden;
     position: relative;
     border: 1px solid var(--card-border);
+    margin-top: 2px;
   }
   .gripper-bar {
     height: 100%;
@@ -248,76 +285,57 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .gripper-label {
     display: flex;
     justify-content: space-between;
-    font-size: 0.72rem;
+    font-size: 0.68rem;
     color: var(--text-secondary);
-    margin-top: 4px;
     font-family: monospace;
   }
-  .btn-reconnect {
-    background: #2563eb;
-    color: #fff;
-    border: none;
-    border-radius: 6px;
-    padding: 6px 12px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background 0.2s;
-  }
-  .btn-reconnect:hover { background: #1d4ed8; }
 </style>
 </head>
 <body>
 
 <header>
-  <div class="title-group">
-    <h1>🤖 OpenArm 實時監控控制台</h1>
-    <span id="connBadge" class="badge badge-disconnected">● 正在連線 WebRTC...</span>
-    <span id="recBadge" class="badge badge-standby">● 待命中 (STANDBY)</span>
+  <div class="header-left">
+    <span class="logo">🤖 OpenArm WebRTC 實時監控</span>
+    <span id="connBadge" class="badge badge-disconnected">● 連線中...</span>
+    <span id="recBadge" class="badge badge-standby">● 待命 (STANDBY)</span>
   </div>
-  <div class="header-badges">
-    <button class="btn-reconnect" onclick="reconnect()">重新連線</button>
+  
+  <div class="metrics-bar">
+    <div class="metric-item">
+      <span class="m-label">網路 RTT</span>
+      <span class="m-val" id="valRtt">-- ms</span>
+      <span class="m-sub" id="valNetOneWay">(單向 -- ms)</span>
+    </div>
+    <div class="metric-item">
+      <span class="m-label">管線處理</span>
+      <span class="m-val" id="valPipeline">-- ms</span>
+    </div>
+    <div class="metric-item">
+      <span class="m-label">端到端總延遲</span>
+      <span class="m-val val-good" id="valTotal">-- ms</span>
+    </div>
+    <div class="metric-item">
+      <span class="m-label">串流 FPS / 頻率</span>
+      <span class="m-val" id="valFps">-- FPS</span>
+      <span class="m-sub" id="valLoopHz">(-- Hz)</span>
+    </div>
   </div>
+
+  <button class="btn-reconnect" onclick="reconnect()">重新連線</button>
 </header>
 
-<!-- 延遲與效能核心指標區 -->
-<div class="metrics-grid">
-  <div class="metric-card">
-    <div class="metric-label">🌐 網路往返延遲 (RTT)</div>
-    <div class="metric-value" id="valRtt">-- ms</div>
-    <div class="metric-sub" id="valNetOneWay">單向網路約: -- ms</div>
-  </div>
-  <div class="metric-card">
-    <div class="metric-label">⚙️ 控制管線延遲 (Pipeline)</div>
-    <div class="metric-value" id="valPipeline">-- ms</div>
-    <div class="metric-sub">採集、遙操處理至發送指令</div>
-  </div>
-  <div class="metric-card">
-    <div class="metric-label">⏱️ 端到端總延遲 (E2E Latency)</div>
-    <div class="metric-value val-good" id="valTotal">-- ms</div>
-    <div class="metric-sub">管線處理 + 單向網路傳輸</div>
-  </div>
-  <div class="metric-card">
-    <div class="metric-label">🎥 畫面幀率 / 控制頻率</div>
-    <div class="metric-value" id="valFps">-- FPS</div>
-    <div class="metric-sub" id="valLoopHz">機器人主迴圈: -- Hz</div>
-  </div>
-</div>
-
-<!-- 主內容區 -->
 <div class="main-layout">
-  <div>
+  <div class="left-panel">
     <div class="video-container">
       <video id="remoteVideo" autoplay playsinline muted></video>
       <div class="video-hud">
-        <span class="hud-badge" id="hudStatus">WebRTC STREAM</span>
+        <span class="hud-badge" id="hudStatus">WebRTC</span>
         <span id="hudResolution">-- x --</span>
         <span id="hudFps">-- FPS</span>
       </div>
     </div>
 
-    <!-- 延遲歷史折線圖 -->
-    <div class="chart-card">
+    <div class="chart-bar">
       <div class="chart-header">
         <span>實時總延遲歷史趨勢 (最近 60 秒)</span>
         <span id="chartStats">平均: -- ms | 最大: -- ms</span>
@@ -326,51 +344,52 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- 雙手臂與夾爪狀態 -->
   <div class="telemetry-sidebar">
-    <!-- 左臂 -->
     <div class="arm-card">
       <div class="arm-title">
         <span>左臂 (Left Arm)</span>
-        <span id="leftArmStatus" style="font-size:0.75rem; color:var(--text-secondary);">正常</span>
+        <span id="leftArmStatus" style="font-size:0.7rem; color:var(--text-secondary);">正常</span>
       </div>
       <table class="joint-table">
         <thead>
-          <tr><th>關節</th><th>當前角度</th><th>目標角度</th><th>誤差</th></tr>
+          <tr><th>關節</th><th>當前</th><th>目標</th><th>誤差</th></tr>
         </thead>
         <tbody id="leftJointBody">
-          <tr><td colspan="4" style="color:var(--text-secondary)">等待數據接收...</td></tr>
+          <tr><td colspan="4" style="color:var(--text-secondary)">等候數據中...</td></tr>
         </tbody>
       </table>
-      <div class="gripper-label">
-        <span>夾爪 (Gripper)</span>
-        <span id="leftGripperVal">--°</span>
-      </div>
-      <div class="gripper-bar-container">
-        <div id="leftGripperBar" class="gripper-bar"></div>
+      <div class="gripper-section">
+        <div class="gripper-label">
+          <span>夾爪</span>
+          <span id="leftGripperVal">--°</span>
+        </div>
+        <div class="gripper-bar-container">
+          <div id="leftGripperBar" class="gripper-bar"></div>
+        </div>
       </div>
     </div>
 
-    <!-- 右臂 -->
     <div class="arm-card">
       <div class="arm-title">
         <span>右臂 (Right Arm)</span>
-        <span id="rightArmStatus" style="font-size:0.75rem; color:var(--text-secondary);">正常</span>
+        <span id="rightArmStatus" style="font-size:0.7rem; color:var(--text-secondary);">正常</span>
       </div>
       <table class="joint-table">
         <thead>
-          <tr><th>關節</th><th>當前角度</th><th>目標角度</th><th>誤差</th></tr>
+          <tr><th>關節</th><th>當前</th><th>目標</th><th>誤差</th></tr>
         </thead>
         <tbody id="rightJointBody">
-          <tr><td colspan="4" style="color:var(--text-secondary)">等待數據接收...</td></tr>
+          <tr><td colspan="4" style="color:var(--text-secondary)">等候數據中...</td></tr>
         </tbody>
       </table>
-      <div class="gripper-label">
-        <span>夾爪 (Gripper)</span>
-        <span id="rightGripperVal">--°</span>
-      </div>
-      <div class="gripper-bar-container">
-        <div id="rightGripperBar" class="gripper-bar"></div>
+      <div class="gripper-section">
+        <div class="gripper-label">
+          <span>夾爪</span>
+          <span id="rightGripperVal">--°</span>
+        </div>
+        <div class="gripper-bar-container">
+          <div id="rightGripperBar" class="gripper-bar"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -386,7 +405,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   let latencyHistory = [];
   const maxHistory = 60;
 
-  // 視訊 FPS 統計
   let frameCount = 0;
   let lastFpsTime = performance.now();
   let measuredFps = 0;
@@ -403,10 +421,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   const hudResolution = document.getElementById('hudResolution');
   const hudFps = document.getElementById('hudFps');
 
-  // 初始化 WebRTC 連線
   async function connect() {
     connBadge.className = 'badge badge-disconnected';
-    connBadge.innerText = '● 正在建立 WebRTC 連線...';
+    connBadge.innerText = '● 連線中...';
 
     if (pc) {
       try { pc.close(); } catch(e) {}
@@ -417,13 +434,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     });
 
     pc.onconnectionstatechange = () => {
-      console.log('WebRTC 連線狀態:', pc.connectionState);
       if (pc.connectionState === 'connected') {
         connBadge.className = 'badge badge-connected';
-        connBadge.innerText = '● WebRTC 串流連線正常';
+        connBadge.innerText = '● 連線正常';
       } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
         connBadge.className = 'badge badge-disconnected';
-        connBadge.innerText = '● WebRTC 已斷線';
+        connBadge.innerText = '● 斷線';
       }
     };
 
@@ -434,10 +450,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     };
 
-    // 建立 Telemetry DataChannel
     dc = pc.createDataChannel('telemetry');
     dc.onopen = () => {
-      console.log('DataChannel 已開啟');
       startPingPong();
     };
     dc.onclose = () => {
@@ -452,7 +466,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           handleTelemetry(msg);
         }
       } catch (err) {
-        console.error('DataChannel 訊息解析失敗:', err);
+        console.error('DataChannel error:', err);
       }
     };
 
@@ -462,7 +476,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      // 等候 ICE 收集完成或超時發送 (確保區域網路 host candidates 收集完畢)
       await new Promise(resolve => {
         if (pc.iceGatheringState === 'complete') {
           resolve();
@@ -487,13 +500,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         })
       });
 
-      if (!resp.ok) throw new Error('伺服器 Offer 回應錯誤: ' + resp.status);
+      if (!resp.ok) throw new Error('Offer error: ' + resp.status);
       const answer = await resp.json();
       await pc.setRemoteDescription(new RTCSessionDescription(answer));
     } catch (err) {
-      console.error('WebRTC 連線失敗:', err);
+      console.error('WebRTC error:', err);
       connBadge.className = 'badge badge-disconnected';
-      connBadge.innerText = '● 連線失敗，稍後自動重試';
+      connBadge.innerText = '● 連線失敗，重試中';
       setTimeout(connect, 3000);
     }
   }
@@ -520,14 +533,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const netOneWay = currentRtt / 2.0;
 
     valRtt.innerText = currentRtt.toFixed(1) + ' ms';
-    valNetOneWay.innerText = '單向網路約: ' + netOneWay.toFixed(1) + ' ms';
+    valNetOneWay.innerText = '(單向 ' + netOneWay.toFixed(1) + ' ms)';
 
     if (currentRtt < 30) {
-      valRtt.className = 'metric-value val-good';
+      valRtt.className = 'm-val val-good';
     } else if (currentRtt < 80) {
-      valRtt.className = 'metric-value val-warn';
+      valRtt.className = 'm-val val-warn';
     } else {
-      valRtt.className = 'metric-value val-bad';
+      valRtt.className = 'm-val val-bad';
     }
 
     updateTotalLatency();
@@ -536,9 +549,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   function handleTelemetry(msg) {
     currentPipeline = msg.pipeline_latency_ms || 0;
     valPipeline.innerText = currentPipeline.toFixed(1) + ' ms';
-    valLoopHz.innerText = '機器人主迴圈: ' + (msg.fps ? msg.fps.toFixed(1) : '--') + ' Hz';
+    valLoopHz.innerText = '(' + (msg.fps ? msg.fps.toFixed(1) : '--') + ' Hz)';
 
-    // 狀態 Badge 更新
     if (msg.status === 'recording') {
       recBadge.className = 'badge badge-recording';
       recBadge.innerText = '● 錄製中 (RECORDING)';
@@ -547,12 +559,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       recBadge.innerText = '● 重置中 (RESET)';
     } else {
       recBadge.className = 'badge badge-standby';
-      recBadge.innerText = '● 待命中 (STANDBY)';
+      recBadge.innerText = '● 待命 (STANDBY)';
     }
 
     updateTotalLatency();
 
-    // 更新手臂表格與夾爪
     if (msg.arms) {
       renderArmTable('left', msg.arms.left);
       renderArmTable('right', msg.arms.right);
@@ -565,14 +576,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     valTotal.innerText = currentTotal.toFixed(1) + ' ms';
 
     if (currentTotal < 45) {
-      valTotal.className = 'metric-value val-good';
+      valTotal.className = 'm-val val-good';
     } else if (currentTotal < 90) {
-      valTotal.className = 'metric-value val-warn';
+      valTotal.className = 'm-val val-warn';
     } else {
-      valTotal.className = 'metric-value val-bad';
+      valTotal.className = 'm-val val-bad';
     }
 
-    // 加入折線圖歷史
     latencyHistory.push(currentTotal);
     if (latencyHistory.length > maxHistory) latencyHistory.shift();
     drawChart();
@@ -596,7 +606,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       body.innerHTML = html;
     }
 
-    // 夾爪
     if (armData.gripper !== undefined) {
       const gVal = armData.gripper;
       document.getElementById(side + 'GripperVal').innerText = gVal.toFixed(1) + '°';
@@ -605,7 +614,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
-  // 測量視訊 FPS
   if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
     function onVideoFrame() {
       frameCount++;
@@ -625,7 +633,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     video.requestVideoFrameCallback(onVideoFrame);
   }
 
-  // 繪製輕量折線圖
   const canvas = document.getElementById('latencyChart');
   const ctx = canvas.getContext('2d');
   function drawChart() {
@@ -642,23 +649,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const minVal = 0;
     const range = maxVal - minVal || 1;
 
-    // 計算平均與最大
     const avg = (latencyHistory.reduce((a, b) => a + b, 0) / latencyHistory.length).toFixed(1);
     const max = Math.max(...latencyHistory).toFixed(1);
     document.getElementById('chartStats').innerText = `平均: ${avg} ms | 最大: ${max} ms`;
 
     ctx.beginPath();
     ctx.strokeStyle = '#38bdf8';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 1.5;
     for (let i = 0; i < latencyHistory.length; i++) {
       const x = (i / (maxHistory - 1)) * w;
-      const y = h - ((latencyHistory[i] - minVal) / range) * (h - 10) - 5;
+      const y = h - ((latencyHistory[i] - minVal) / range) * (h - 6) - 3;
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
     ctx.stroke();
 
-    // 漸層填充下方
     ctx.lineTo((latencyHistory.length - 1) / (maxHistory - 1) * w, h);
     ctx.lineTo(0, h);
     ctx.fillStyle = 'rgba(56, 189, 248, 0.1)';
@@ -981,81 +986,121 @@ class WebRTCStreamer:
 
         return images
 
-    def _create_mosaic(self, images: dict[str, np.ndarray], target_h: int = 480) -> np.ndarray:
-        """將多台相機影像合成為單一低頻寬高清晰拼貼畫布。
+    def _create_mosaic(self, images: dict[str, np.ndarray], target_h: int | None = None) -> np.ndarray:
+        """將多台相機影像合成為單一拼貼畫布（不限制輸出解析度，保留相機原生畫質）。
 
         排版邏輯：
-        - 1 台相機：直接顯示全畫面
-        - 2 台相機：左邊 (left) 與 右邊 (right) 水平並排
-        - 3 台相機：上排為左腕 (wright_left / wrist_left) 與 右腕 (wright_right / wrist_right)，下排置中顯示主相機 (ego)
-        - 4 台以上：2x2 或多行網格排列
+        - 1 台相機：原生全畫面顯示
+        - 2 台相機：左腕與右腕水平並排
+        - 3 台相機：
+                     ego (置中)
+            wright_left wright_right
+        - 4 台以上：多相機網格排列
         """
         if not images:
             return self._placeholder_frame
 
-        # 智慧排序相機：左臂相機最前(0)、右臂相機次之(1)、其他相機(2)、全景/主視角(ego)置底(3)
-        def cam_sort_key(item: tuple[str, np.ndarray]) -> tuple[int, str]:
-            name = item[0].lower()
-            if "left" in name or name.endswith("_l"):
-                return (0, item[0])
-            elif "right" in name or name.endswith("_r"):
-                return (1, item[0])
-            elif any(k in name for k in ("ego", "center", "main", "front", "top", "overhead")):
-                return (3, item[0])
-            return (2, item[0])
+        # 尋找關鍵相機：左腕、右腕、主視角 (ego)
+        left_item = None
+        right_item = None
+        ego_item = None
+        others = []
 
-        sorted_items = sorted(images.items(), key=cam_sort_key)
-
-        # 3台或以上相機時，單列基準高度設為 360，雙列拼接後剛好為 720p (720px) 高度
-        row_h = 360 if len(sorted_items) >= 3 else target_h
-
-        processed = []
-        for name, img in sorted_items:
-            h, w = img.shape[:2]
-            new_w = int(w * (row_h / h))
-            resized = cv2.resize(img, (new_w, row_h), interpolation=cv2.INTER_LINEAR)
-            # 加上相機名稱浮水印 Badge
-            cv2.putText(resized, f"[{name}]", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 3)
-            cv2.putText(resized, f"[{name}]", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 230, 255), 2)
-            processed.append((name, resized))
-
-        if len(processed) == 1:
-            mosaic = processed[0][1]
-        elif len(processed) == 2:
-            mosaic = np.hstack([p[1] for p in processed])
-        elif len(processed) == 3:
-            # 上排：左手與右手腕相機 (wright_left / wrist_left, wright_right / wrist_right)
-            top_row = np.hstack([processed[0][1], processed[1][1]])
-            top_w = top_row.shape[1]
-
-            # 下排：全景相機 (ego) 水平置中於畫面下方
-            bot_img = processed[2][1]
-            bot_w = bot_img.shape[1]修化
-
-            bot_row = np.zeros((row_h, top_w, 3), dtype=np.uint8)
-            bot_row[:] = (15, 23, 42)  # 與 Web UI 暗黑背景底色一致
-
-            if bot_w <= top_w:
-                x_offset = (top_w - bot_w) // 2
-                bot_row[:, x_offset : x_offset + bot_w] = bot_img
+        for name, img in images.items():
+            low = name.lower()
+            if "left" in low or low.endswith("_l"):
+                left_item = (name, img)
+            elif "right" in low or low.endswith("_r"):
+                right_item = (name, img)
+            elif any(k in low for k in ("ego", "center", "main", "front", "top", "overhead")):
+                ego_item = (name, img)
             else:
-                bot_row = cv2.resize(bot_img, (top_w, row_h), interpolation=cv2.INTER_AREA)
+                others.append((name, img))
+
+        def annotate(name: str, img: np.ndarray) -> np.ndarray:
+            out = img.copy()
+            cv2.putText(out, f"[{name}]", (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 3)
+            cv2.putText(out, f"[{name}]", (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 230, 255), 2)
+            return out
+
+        # 情況 1: 3 台相機 -> 上排 ego 置中，下排 wright_left 與 wright_right 並排
+        if len(images) == 3 and left_item and right_item and (ego_item or others):
+            if not ego_item:
+                ego_item = others[0]
+
+            ego_img = annotate(ego_item[0], ego_item[1])
+            wl_img = annotate(left_item[0], left_item[1])
+            wr_img = annotate(right_item[0], right_item[1])
+
+            # 下排：左右手腕相機並排（以較高者為基準對齊高度）
+            h_bot = max(wl_img.shape[0], wr_img.shape[0])
+            if wl_img.shape[0] != h_bot:
+                wl_img = cv2.resize(wl_img, (int(wl_img.shape[1] * (h_bot / wl_img.shape[0])), h_bot), interpolation=cv2.INTER_LINEAR)
+            if wr_img.shape[0] != h_bot:
+                wr_img = cv2.resize(wr_img, (int(wr_img.shape[1] * (h_bot / wr_img.shape[0])), h_bot), interpolation=cv2.INTER_LINEAR)
+            bot_row = np.hstack([wl_img, wr_img])
+
+            # 總寬度由下排與 ego 中較寬者決定
+            w_total = max(ego_img.shape[1], bot_row.shape[1])
+            h_ego = ego_img.shape[0]
+
+            # 上排：ego 置中於頂部
+            top_row = np.zeros((h_ego, w_total, 3), dtype=np.uint8)
+            top_row[:] = (15, 23, 42)
+            x_ego = (w_total - ego_img.shape[1]) // 2
+            top_row[:, x_ego : x_ego + ego_img.shape[1]] = ego_img
+
+            # 下排：若寬度小於 w_total，則下排也置中留白
+            if bot_row.shape[1] < w_total:
+                bot_canvas = np.zeros((h_bot, w_total, 3), dtype=np.uint8)
+                bot_canvas[:] = (15, 23, 42)
+                x_bot = (w_total - bot_row.shape[1]) // 2
+                bot_canvas[:, x_bot : x_bot + bot_row.shape[1]] = bot_row
+                bot_row = bot_canvas
 
             mosaic = np.vstack([top_row, bot_row])
+            return mosaic
+
+        # 情況 2: 2 台相機 -> 水平並排
+        if len(images) == 2 and left_item and right_item:
+            wl = annotate(left_item[0], left_item[1])
+            wr = annotate(right_item[0], right_item[1])
+            h = max(wl.shape[0], wr.shape[0])
+            if wl.shape[0] != h:
+                wl = cv2.resize(wl, (int(wl.shape[1] * (h / wl.shape[0])), h), interpolation=cv2.INTER_LINEAR)
+            if wr.shape[0] != h:
+                wr = cv2.resize(wr, (int(wr.shape[1] * (h / wr.shape[0])), h), interpolation=cv2.INTER_LINEAR)
+            return np.hstack([wl, wr])
+
+        # 情況 3: 其他相機組合（單相機或 4 台以上）
+        items = [(name, annotate(name, img)) for name, img in images.items()]
+        if len(items) == 1:
+            return items[0][1]
+        elif len(items) == 2:
+            h = max(items[0][1].shape[0], items[1][1].shape[0])
+            i0 = cv2.resize(items[0][1], (int(items[0][1].shape[1] * (h / items[0][1].shape[0])), h))
+            i1 = cv2.resize(items[1][1], (int(items[1][1].shape[1] * (h / items[1][1].shape[0])), h))
+            return np.hstack([i0, i1])
         else:
-            mid = (len(processed) + 1) // 2
-            row1 = np.hstack([p[1] for p in processed[:mid]])
-            row2 = np.hstack([p[1] for p in processed[mid:]])
-            if row1.shape[1] != row2.shape[1]:
-                row2 = cv2.resize(row2, (row1.shape[1], row2.shape[0]))
-            mosaic = np.vstack([row1, row2])
+            mid = (len(items) + 1) // 2
+            h1 = max(it[1].shape[0] for it in items[:mid])
+            r1_imgs = [cv2.resize(it[1], (int(it[1].shape[1] * (h1 / it[1].shape[0])), h1)) for it in items[:mid]]
+            r1 = np.hstack(r1_imgs)
 
-        # 限制最大輸出解析度 (1280x720) 以維持流暢即時編碼
-        if mosaic.shape[1] > 1280:
-            scale = 1280 / mosaic.shape[1]
-            mosaic = cv2.resize(mosaic, (1280, int(mosaic.shape[0] * scale)), interpolation=cv2.INTER_AREA)
+            h2 = max(it[1].shape[0] for it in items[mid:])
+            r2_imgs = [cv2.resize(it[1], (int(it[1].shape[1] * (h2 / it[1].shape[0])), h2)) for it in items[mid:]]
+            r2 = np.hstack(r2_imgs)
 
-        return mosaic
+            w = max(r1.shape[1], r2.shape[1])
+            if r1.shape[1] < w:
+                pad = np.zeros((r1.shape[0], w - r1.shape[1], 3), dtype=np.uint8)
+                pad[:] = (15, 23, 42)
+                r1 = np.hstack([r1, pad])
+            if r2.shape[1] < w:
+                pad = np.zeros((r2.shape[0], w - r2.shape[1], 3), dtype=np.uint8)
+                pad[:] = (15, 23, 42)
+                r2 = np.hstack([r2, pad])
+            return np.vstack([r1, r2])
 
     def _parse_arm_states(self, obs: dict[str, Any]) -> dict[str, Any]:
         """從 obs 解析關節與夾爪角度。"""
