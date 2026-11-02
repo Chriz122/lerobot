@@ -44,6 +44,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from openarm_src.utils.can_mgr import can_setup_and_check
 from openarm_src.utils.config import GRIPPER
 from openarm_src.utils.safety import final_safety_net, register_arm, safe_disable, unregister_arm
 
@@ -400,6 +401,11 @@ def main():
     arm = None
     try:
         if need_arm:
+            # 確保 CAN 介面已啟動 (自動執行 lerobot-setup-can 邏輯)
+            try:
+                can_setup_and_check()
+            except Exception as e:
+                logger.debug("can_setup_and_check: %s", e)
             arm = create_follower_arm(arm_port=args.arm_port, side=args.side)
 
         if args.mode == "monitor":
