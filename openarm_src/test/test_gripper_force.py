@@ -159,11 +159,12 @@ def list_serial_ports():
 
 def create_follower_arm(arm_port: str, side: str = "right"):
     """連線 OpenArm 單臂 Follower。"""
-    from lerobot.robots.openarm_follower import OpenArmFollower, OpenArmFollowerConfigBase
+    from lerobot.robots.openarm_follower import OpenArmFollower, OpenArmFollowerConfig
 
-    cfg = OpenArmFollowerConfigBase(
+    cfg = OpenArmFollowerConfig(
         port=arm_port,
         side=side,
+        id=f"openarm_{side}_follower",
     )
     arm = OpenArmFollower(cfg)
     logger.info("[Robot] 正在連線至機械手臂 (%s, port=%s)...", side, arm_port)
