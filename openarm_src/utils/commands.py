@@ -201,6 +201,38 @@ def parse_webrtc_flag(args: list[str]) -> tuple[bool, int, list[str]]:
     return bool(webrtc_enabled), webrtc_port, cleaned
 
 
+def parse_force_monitor_flag(args: list[str]) -> tuple[bool, str | None, list[str]]:
+    """解析並過濾 --force-monitor 或 --arduino-port=<port> 參數。"""
+    cleaned = []
+    monitor_force = False
+    arduino_port = os.environ.get("OPENARM_ARDUINO_PORT")
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg.startswith(("--arduino-port=", "-arduino-port=")):
+            arduino_port = arg.split("=", 1)[1].strip()
+            monitor_force = True
+        elif arg in ("--arduino-port", "-arduino-port"):
+            if i + 1 < len(args) and not args[i + 1].startswith("-"):
+                arduino_port = args[i + 1].strip()
+                i += 1
+            monitor_force = True
+        elif arg in ("--force-monitor", "-force-monitor", "--show-force"):
+            monitor_force = True
+        else:
+            cleaned.append(arg)
+        i += 1
+
+    if monitor_force:
+        os.environ["OPENARM_FORCE_MONITOR"] = "1"
+        if arduino_port:
+            os.environ["OPENARM_ARDUINO_PORT"] = arduino_port
+            logger.info("[force-monitor] 已啟用力矩與 Arduino 壓力實時印出 (Arduino Port=%s)", arduino_port)
+        else:
+            logger.info("[force-monitor] 已啟用夾爪力矩實時印出")
+    return monitor_force, arduino_port, cleaned
+
+
 def run_cli_mode(mode: str, rest: list[str]):
     if mode == "check":
         run_check(rest)
@@ -213,6 +245,8 @@ def run_cli_mode(mode: str, rest: list[str]):
     _, cleaned_rest = parse_bilateral_flag(rest)
     # 解析並過濾 -webrtc 參數
     _, _, cleaned_rest = parse_webrtc_flag(cleaned_rest)
+    # 解析並過濾 --arduino-port / --force-monitor 參數
+    parse_force_monitor_flag(cleaned_rest)
 
     install_patches()
     sys.argv = [f"lerobot-{mode}"] + cleaned_rest

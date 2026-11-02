@@ -489,6 +489,18 @@ def patch_teleop_loop(module):
         streamer = get_webrtc_streamer(port=port)
         streamer.start()
 
+    arduino_reader = None
+    if os.environ.get("OPENARM_FORCE_MONITOR", "0") == "1":
+        arduino_port = os.environ.get("OPENARM_ARDUINO_PORT")
+        if arduino_port:
+            try:
+                from openarm_src.test.test_gripper_force import ArduinoReader
+                arduino_reader = ArduinoReader(port=arduino_port)
+                arduino_reader.start()
+                logger.info("[teleop] 已連線 Arduino 壓力感測器 (%s)", arduino_port)
+            except Exception as e:
+                logger.warning("[teleop] Arduino 連線失敗: %s", e)
+
     orig = module.teleop_loop
 
     def teleop_loop(*args, **kwargs):
@@ -500,7 +512,50 @@ def patch_teleop_loop(module):
             streamer.set_recording(False)
         if robot is not None and teleop is not None:
             bind_force_feedback(robot, teleop)
-        return orig(*args, **kwargs)
+
+        # 掛載實時力矩與 Arduino 壓力印出
+        if os.environ.get("OPENARM_FORCE_MONITOR", "0") == "1" and robot is not None:
+            orig_send_action = robot.send_action
+            last_print_t = [0.0]
+
+            def send_action_with_force_monitor(action, *s_args, **s_kwargs):
+                res = orig_send_action(action, *s_args, **s_kwargs)
+                now = time.perf_counter()
+                if now - last_print_t[0] >= 0.05:  # 20Hz 刷新頻率
+                    last_print_t[0] = now
+                    try:
+                        parts = []
+                        # 取得手臂各夾爪狀態
+                        for pfx, arm in [("左", getattr(robot, "left_arm", None)), ("右", getattr(robot, "right_arm", None))]:
+                            if arm is None and hasattr(robot, "bus"):
+                                arm = robot
+                                pfx = ""
+                            if arm is not None and hasattr(arm, "bus"):
+                                g_state = arm.bus._last_known_states.get("gripper", {})
+                                t_val = g_state.get("torque", 0.0)
+                                p_val = g_state.get("position", 0.0)
+                                parts.append(f"{pfx}爪: pos={p_val:5.1f}°, tau={t_val:6.3f}Nm")
+                            if pfx == "":
+                                break
+
+                        # 取得 Arduino 感測器電壓/力量
+                        if arduino_reader is not None:
+                            raw, volt, _ = arduino_reader.get_latest()
+                            parts.append(f"SY40電壓={volt:5.2f}V (RAW={raw:4.0f})")
+
+                        if parts:
+                            print("\r[Force] " + " | ".join(parts) + "   ", end="", flush=True)
+                    except Exception:
+                        pass
+                return res
+
+            robot.send_action = send_action_with_force_monitor
+
+        try:
+            return orig(*args, **kwargs)
+        finally:
+            if arduino_reader is not None:
+                arduino_reader.stop()
 
     module.teleop_loop = teleop_loop
 

@@ -158,6 +158,22 @@ def list_serial_ports():
     print()
 
 
+def create_leader_arm(leader_port: str, side: str = "right"):
+    """連線 OpenArm 單臂 Leader。"""
+    from lerobot.teleoperators.openarm_leader import OpenArmLeader, OpenArmLeaderConfig
+
+    cfg = OpenArmLeaderConfig(
+        port=leader_port,
+        id=f"openarm_{side}_leader",
+    )
+    leader = OpenArmLeader(cfg)
+    logger.info("[Robot] 正在連線至 Leader 主臂 (%s, port=%s)...", side, leader_port)
+    leader.connect()
+    register_arm(leader)
+    logger.info("[Robot] Leader 主臂連線成功！")
+    return leader
+
+
 def create_follower_arm(arm_port: str, side: str = "right"):
     """連線 OpenArm 單臂 Follower。"""
     from lerobot.robots.openarm_follower import OpenArmFollower, OpenArmFollowerConfig
@@ -177,6 +193,7 @@ def create_follower_arm(arm_port: str, side: str = "right"):
 
 def run_monitor_mode(
     arm=None,
+    leader=None,
     arduino: ArduinoReader | None = None,
     source: str = "both",
 ):
@@ -198,14 +215,25 @@ def run_monitor_mode(
         while True:
             parts = []
 
-            # 1. 讀取機械手臂夾爪馬達數值
+            # 1. 若有連接 Leader，將 Leader 夾爪動作即時下發給 Follower
+            if leader is not None and arm is not None:
+                try:
+                    leader_act = leader.get_action()
+                    g_cmd = leader_act.get("gripper.pos", 0.0)
+                    arm.send_action({"gripper.pos": g_cmd})
+                    parts.append(f"Leader目標: {g_cmd:5.1f}°")
+                except Exception as e:
+                    parts.append(f"[Leader控制錯誤: {e}]")
+
+            # 2. 讀取 Follower 夾爪馬達的實際位置與回傳力矩
             if source in ("both", "motor") and arm is not None:
                 try:
-                    states = arm.bus.sync_read_all_states([GRIPPER])
+                    # 使用 sync_read 獲取即時狀態
+                    states = arm.bus._last_known_states if leader is not None else arm.bus.sync_read_all_states([GRIPPER])
                     g_state = states.get(GRIPPER, {})
                     pos = g_state.get("position", 0.0)
                     torque = g_state.get("torque", 0.0)
-                    parts.append(f"夾爪位置: {pos:6.1f}° | 馬達回傳力矩: {torque:6.3f} Nm")
+                    parts.append(f"從臂夾爪: {pos:5.1f}° | 力矩: {torque:6.3f} Nm")
                 except Exception as e:
                     parts.append(f"[馬達讀取錯誤: {e}]")
 
@@ -363,7 +391,8 @@ def main():
     parser.add_argument("--list-ports", action="store_true", help="列出目前電腦上所有的 COM 序列埠")
     parser.add_argument("--arduino-port", default="COM3", help="Arduino 序列埠 (如 COM3 或 /dev/ttyUSB0)")
     parser.add_argument("--baudrate", type=int, default=115200, help="Arduino Serial Baudrate，預設 115200")
-    parser.add_argument("--arm-port", default="can0", help="機械手臂 CAN 通訊埠 (如 can0, can1)")
+    parser.add_argument("--arm-port", default="can0", help="Follower 從臂 CAN 通訊埠 (如 can0, can1)")
+    parser.add_argument("--leader-port", default=None, help="Leader 主臂 CAN 通訊埠 (如 can2, can3；若指定則啟用 Leader 遙控)")
     parser.add_argument("--side", default="right", choices=["left", "right"], help="測試左臂或右臂，預設 right")
     parser.add_argument(
         "--mode",
@@ -399,6 +428,7 @@ def main():
 
     # 2. 連線機械手臂 (若需要)
     arm = None
+    leader = None
     try:
         if need_arm:
             # 確保 CAN 介面已啟動 (自動執行 lerobot-setup-can 邏輯)
@@ -406,10 +436,16 @@ def main():
                 can_setup_and_check()
             except Exception as e:
                 logger.debug("can_setup_and_check: %s", e)
+
+            # 連線 Follower
             arm = create_follower_arm(arm_port=args.arm_port, side=args.side)
 
+            # 若有指定 --leader-port，連線 Leader
+            if args.leader_port:
+                leader = create_leader_arm(leader_port=args.leader_port, side=args.side)
+
         if args.mode == "monitor":
-            run_monitor_mode(arm=arm, arduino=arduino, source=args.source)
+            run_monitor_mode(arm=arm, leader=leader, arduino=arduino, source=args.source)
         else:
             if not arm or not arduino:
                 logger.error("[Calibrate] 校正模式需要同時連線手臂與 Arduino！")
@@ -427,6 +463,13 @@ def main():
     finally:
         if arduino:
             arduino.stop()
+        if leader:
+            try:
+                safe_disable(leader)
+                leader.disconnect()
+            except Exception:
+                pass
+            unregister_arm(leader)
         if arm:
             try:
                 safe_disable(arm)
