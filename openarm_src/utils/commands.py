@@ -41,7 +41,7 @@ def run_check(argv):
         right_arm_config=OpenArmLeaderConfigBase(port=a.right_port),
     )
     teleop = BiOpenArmLeader(cfg)
-    print("\n⚠  啟動前請讓兩支 leader 自然下垂 (零點姿態)！")
+    print("\n[注意] 啟動前請讓兩支 leader 自然下垂 (零點姿態)！")
     teleop.connect()
     print("重力補償已開啟。慢慢把手臂抬到水平：應該感覺『變輕、放手會停住』。")
     print("若某關節放手後往上飄 → 該關節 JOINT_SIGN 可能要改 -1，或 JOINT_GC_SCALE 調小。")
@@ -76,7 +76,7 @@ def run_check(argv):
                     out = home
                 with open(a.save, "w") as f:
                     json.dump(out, f, indent=2)
-                print(f"\n✔ saved pose #{len(wps) if a.waypoints else 1} -> {a.save}")
+                print(f"\n[OK] saved pose #{len(wps) if a.waypoints else 1} -> {a.save}")
             time.sleep(0.1)
     except KeyboardInterrupt:
         print()
@@ -107,11 +107,11 @@ def run_home(argv):
         right_arm_config=OpenArmFollowerConfigBase(port=a.right_port, side="right"),
     )
     robot = BiOpenArmFollower(cfg)
-    print("\n⚠  follower 將開啟力矩並移動，請淨空桌面、手放在急停旁。")
+    print("\n[注意] follower 將開啟力矩並移動，請淨空桌面、手放在急停旁。")
     robot.connect()
     try:
         go_home(robot, None, load_waypoints(a.home), a.time)
-        input("\n✔ follower 已在起始姿態。按 Enter 讓它慢慢回到下垂並關閉力矩 ...")
+        input("\n[完成] follower 已在起始姿態。按 Enter 讓它慢慢回到下垂並關閉力矩 ...")
     except KeyboardInterrupt:
         print()
     finally:

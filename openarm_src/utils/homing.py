@@ -108,7 +108,7 @@ def go_home(robot, teleop, waypoints: list[dict[str, float]], duration: float, g
     # 碰桌檢查要用完整姿態：waypoint 沒寫到的關節用 follower 目前角度
     f_full = {k: float(v) for k, v in obs.items() if k.endswith(".pos")}
     if guard is not None and not guard.check([{**f_full, **p[0]} for p in plan[::5]] + [{**f_full, **plan[-1][0]}]):
-        input("⚠ homing 可能撞桌，已取消。請用 leader 把手臂移到安全位置，再按 Enter 重試...")
+        input("[警告] homing 可能撞桌，已取消。請用 leader 把手臂移到安全位置，再按 Enter 重試...")
         return go_home(robot, teleop, waypoints, duration, guard)
 
     logger.info(f"[gc] 正在通過 {len(waypoints)} 個路徑點移動至起始姿態...")

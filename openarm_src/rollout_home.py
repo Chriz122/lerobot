@@ -59,12 +59,12 @@ def install_patches():
     def connect(self, *args, **kwargs):
         orig_connect(self, *args, **kwargs)
         waypoints = load_waypoints(HOME_FILE)
-        input(f"\n⚠  follower 將移到起始姿態（{HOME_FILE}，{len(waypoints)} 段）。淨空桌面、手放急停旁，按 Enter 開始移動 ...")
+        input(f"\n[注意] follower 將移到起始姿態（{HOME_FILE}，{len(waypoints)} 段）。淨空桌面、手放急停旁，按 Enter 開始移動 ...")
         for i, wp in enumerate(waypoints, 1):
             print(f"[home] 移動到 waypoint {i}/{len(waypoints)} ...")
             _move_to(self, wp, SEG_TIME)
         time.sleep(0.5)
-        input("\n✔ 已在起始姿態。擺好瓶子與托盤後按 Enter 開始推論 ...")
+        input("\n[完成] 已在起始姿態。擺好瓶子與托盤後按 Enter 開始推論 ...")
         print("[home] 交給模型控制\n")
 
     cls.connect = connect

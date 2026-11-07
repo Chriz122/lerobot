@@ -133,7 +133,7 @@ def can_setup_and_check(max_tries: int = 3):
         logger.info(f"[can] 第 {t} 次測試 {total_found}/{expected}，沒回應：{', '.join(missing_desc)}（耗時 {elapsed*1000:.1f}ms）")
         time.sleep(0.05)
 
-    print(f"\n⚠ 測了 {max_tries} 次仍有馬達沒回應：{', '.join(missing_desc)}")
+    print(f"\n[警告] 測了 {max_tries} 次仍有馬達沒回應：{', '.join(missing_desc)}")
     print("  建議：檢查急停、24V 電源；或關掉 24V 等 10 秒再開。")
     input("  按 Enter 仍要繼續，Ctrl+C 取消 ...")
 

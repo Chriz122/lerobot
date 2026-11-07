@@ -28,7 +28,7 @@ export OPENARM_LEADER_TRACK=1
 
 ## 完整 CLI 執行指令
 
-> ⚠️ **注意**：LeRobot 的 `rollout` 策略要求 Dataset 儲存庫名稱必須以 `rollout_` 開頭（例如 `--dataset.repo_id=JJC489/rollout_openarm_hil`）。
+> **注意**：LeRobot 的 `rollout` 策略要求 Dataset 儲存庫名稱必須以 `rollout_` 開頭（例如 `--dataset.repo_id=JJC489/rollout_openarm_hil`）。
 
 ```bash
 python openarm_gc.py rollout \
@@ -89,3 +89,20 @@ python openarm_gc.py record --bilateral=true ...
 ```
 - `--bilateral=true`：開啟力回饋（若未設 `OPENARM_FF_SCALE`，會預設以 `0.05` 啟動）。
 - `--bilateral=false`：關閉力回饋（將 `OPENARM_FF_SCALE=0`）。
+
+### 3. DAgger 動作防跳躍保護 (Step Jump Guard)
+系統預設自動啟用 **Step Jump Guard**，全面防止 DAgger 狀態切換與推論過程中的動作階躍爆衝：
+- **交接平滑化（PAUSED → AUTONOMOUS）**：人類手動介入結束切回 Policy 時，以當前手臂實際姿態為基準，限制 Policy 首拍最大移動量，平滑 Ramp 過渡，避免機器人瞬間甩動。
+- **單步速率限制（Rate Limiting）**：限制每拍（1/30 秒）關節最大變動量，防止 Policy 輸出分佈外跳變或遙操作瞬變。
+
+可透過環境變數微調：
+```bash
+# 是否啟用防跳躍保護 (1=開啟[預設], 0=關閉)
+export OPENARM_STEP_GUARD=1
+
+# 關節每拍最大位移限制 (度/tick，預設 4.0°，30 FPS 下相當於 120°/s)
+export OPENARM_MAX_STEP_DEG=4.0
+
+# 夾爪每拍最大位移限制 (度/tick，預設 15.0°)
+export OPENARM_MAX_STEP_GRIPPER=15.0
+```

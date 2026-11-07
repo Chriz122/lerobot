@@ -565,6 +565,10 @@ def patch_rollout(module):
     1. 硬體連線完成 (build_rollout_context) 後、policy 開始動之前，leader + follower 一起移到 OPENARM_HOME 起始姿態。
     2. DAgger 推論時 (AUTONOMOUS)，讓 leader 即時鏡像跟隨 follower 移動。
     3. 人類介入時 (CORRECTING)，leader 立即釋放 target，回歸零力重力補償供手動示範。
+    4. DAgger Step Jump 防階躍跳變保護：
+       - 攔截 robot_wrapper.send_action 透過 StepJumpGuard 對關節角度進行單步最大變動量限制 (Rate Limiter)。
+       - 在 DAgger 狀態切換（特別是 PAUSED -> AUTONOMOUS 人類交接回 Policy、PAUSED -> CORRECTING 人類接管）時，
+         自動以當前實際關節角度同步基準，徹底杜絕 Policy 首拍或接管時的劇烈甩動/爆衝。
     """
     waypoints, duration, guard = load_home_config()
     orig = module.build_rollout_context
@@ -573,57 +577,89 @@ def patch_rollout(module):
     def build_rollout_context(*args, **kwargs):
         ctx = orig(*args, **kwargs)
         teleop = ctx.hardware.teleop
+        robot_wrapper = ctx.hardware.robot_wrapper
+
         if waypoints and teleop is not None:
             # 用原始 robot (不經 ThreadSafeRobot)；此時 inference engine 還沒啟動，不會搶 bus
-            go_home(ctx.hardware.robot_wrapper.inner, teleop, waypoints, duration, guard)
+            go_home(robot_wrapper.inner, teleop, waypoints, duration, guard)
 
-        if track_leader and teleop is not None:
-            leaders = get_leaders(teleop)
-            if leaders:
-                _is_tracking = True
+        # 建立 Step Jump 防跳躍保護器
+        from openarm_src.utils.step_guard import StepJumpGuard
 
-                # 1. 攔截 robot_wrapper.send_action：讓 leader 同步跟隨 follower 目標角度
-                orig_send_action = ctx.hardware.robot_wrapper.send_action
+        step_guard = StepJumpGuard()
+        try:
+            step_guard.sync_from_observation(robot_wrapper.get_observation())
+        except Exception as e:
+            logger.warning(f"[step_guard] 初始姿態同步警告: {e}")
 
-                def send_action_with_tracking(action):
-                    res = orig_send_action(action)
-                    nonlocal _is_tracking
-                    if _is_tracking and isinstance(action, dict):
-                        for prefix, leader in leaders:
-                            leader_cmd = {
-                                key[len(prefix):].removesuffix(".pos"): float(v)
-                                for key, v in action.items()
-                                if key.startswith(prefix)
-                            }
-                            if leader_cmd:
-                                leader._gc.set_target(leader_cmd)
-                    return res
+        leaders = get_leaders(teleop) if (track_leader and teleop is not None) else []
+        _is_tracking = bool(leaders)
 
-                ctx.hardware.robot_wrapper.send_action = send_action_with_tracking
+        # 1. 攔截 robot_wrapper.send_action：加入 Step Jump Guard 速率限制，並同步跟隨 leader
+        orig_send_action = robot_wrapper.send_action
 
-                # 2. Hook DAgger 狀態機切換：進入 CORRECTING 時立刻放開 leader
-                from lerobot.rollout.strategies.dagger import DAggerPhase, DAggerStrategy
+        def send_action_guarded(action):
+            # 經過步長保護器抑制瞬變
+            safe_action = step_guard.clamp(action)
+            res = orig_send_action(safe_action)
 
-                orig_apply_transition = DAggerStrategy._apply_transition
+            nonlocal _is_tracking
+            if _is_tracking and isinstance(safe_action, dict) and leaders:
+                for prefix, leader in leaders:
+                    leader_cmd = {
+                        key[len(prefix):].removesuffix(".pos"): float(v)
+                        for key, v in safe_action.items()
+                        if key.startswith(prefix)
+                    }
+                    if leader_cmd:
+                        leader._gc.set_target(leader_cmd)
+            return res
 
-                def apply_transition_with_tracking(self, old_phase, new_phase, *t_args, **t_kwargs):
-                    nonlocal _is_tracking
-                    if new_phase == DAggerPhase.CORRECTING:
-                        _is_tracking = False
-                        logger.info("[gc] 人類介入 (CORRECTING)：釋放 leader 目標，進入純重力補償手動模式")
-                        for _, leader in leaders:
-                            leader._gc.set_target(None)
-                    elif new_phase == DAggerPhase.AUTONOMOUS:
-                        _is_tracking = True
-                        logger.info("[gc] 恢復自主 (AUTONOMOUS)：啟用 leader 跟隨 follower")
-                    elif new_phase == DAggerPhase.PAUSED:
-                        # 暫停時停止持續更新，但維持在最後位置
-                        _is_tracking = False
+        robot_wrapper.send_action = send_action_guarded
+        logger.info(
+            f"[step_guard] 已啟用 DAgger 步長防跳保護 (max_step_deg={step_guard.max_step_deg}°, "
+            f"max_step_gripper={step_guard.max_step_gripper}°)"
+        )
 
-                    return orig_apply_transition(self, old_phase, new_phase, *t_args, **t_kwargs)
+        # 2. Hook DAgger 狀態機切換：同步當前實際姿態基準，避免交接瞬間跳變
+        from lerobot.rollout.strategies.dagger import DAggerPhase, DAggerStrategy
 
-                DAggerStrategy._apply_transition = apply_transition_with_tracking
-                logger.info("[gc] 已啟用 DAgger Leader 鏡像跟隨 (OPENARM_LEADER_TRACK=1)")
+        orig_apply_transition = DAggerStrategy._apply_transition
+
+        def apply_transition_with_guard(self, old_phase, new_phase, *t_args, **t_kwargs):
+            nonlocal _is_tracking
+            if new_phase == DAggerPhase.CORRECTING:
+                _is_tracking = False
+                logger.info("[gc] 人類介入 (CORRECTING)：釋放 leader 目標，進入純重力補償手動模式")
+                for _, leader in leaders:
+                    leader._gc.set_target(None)
+                # 同步基準為人類介入瞬間的真實角度
+                try:
+                    step_guard.sync_from_observation(robot_wrapper.get_observation())
+                except Exception as e:
+                    logger.warning(f"[step_guard] CORRECTING 姿態同步警告: {e}")
+
+            elif new_phase == DAggerPhase.AUTONOMOUS:
+                _is_tracking = bool(leaders)
+                logger.info("[gc] 恢復自主 (AUTONOMOUS)：啟用 leader 跟隨 follower 並同步防跳躍基準")
+                # 同步基準為人類結束示範時的真實角度，確保 Policy 啟動時首拍動作平滑過渡
+                try:
+                    step_guard.sync_from_observation(robot_wrapper.get_observation())
+                except Exception as e:
+                    logger.warning(f"[step_guard] AUTONOMOUS 姿態同步警告: {e}")
+
+            elif new_phase == DAggerPhase.PAUSED:
+                _is_tracking = False
+                try:
+                    step_guard.sync_from_observation(robot_wrapper.get_observation())
+                except Exception as e:
+                    logger.warning(f"[step_guard] PAUSED 姿態同步警告: {e}")
+
+            return orig_apply_transition(self, old_phase, new_phase, *t_args, **t_kwargs)
+
+        DAggerStrategy._apply_transition = apply_transition_with_guard
+        if leaders:
+            logger.info("[gc] 已啟用 DAgger Leader 鏡像跟隨 (OPENARM_LEADER_TRACK=1)")
 
         return ctx
 

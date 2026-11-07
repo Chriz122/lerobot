@@ -262,7 +262,7 @@ def run_step_and_calibrate(
     print("  【自動階梯夾取與校正測試】")
     print(f"  夾爪移動範圍: {start_deg}° -> {end_deg}°，測試階數: {steps} 階")
     print(f"  每階停留採樣: {hold_sec} 秒")
-    print("  ⚠ 請確保 Arduino 壓力感測器已放置於夾爪兩指之間！")
+    print("  [注意] 請確保 Arduino 壓力感測器已放置於夾爪兩指之間！")
     print("=" * 75)
 
     input("\n請確認感測器已就定位後，按 [Enter] 鍵開始測試 (隨時可按 Ctrl+C 緊急停止)...")
@@ -361,9 +361,9 @@ def run_step_and_calibrate(
     print(f"  線性擬合公式: 實際力量 (F) = {slope_a:.4f} * 馬達力矩(Nm) + ({intercept_b:.4f})")
     print(f"  擬合判定係數 (R^2): {r_squared:.4f}  (越接近 1.0 代表回報力矩與真實受力線性度越高)")
     if r_squared > 0.85:
-        print("  ✔ 驗證結論：OpenArm 馬達力矩回報與真實夾取力道具備高度線性正相關！")
+        print("  [OK] 驗證結論：OpenArm 馬達力矩回報與真實夾取力道具備高度線性正相關！")
     else:
-        print("  ⚠ 提示：R^2 偏低，可能是夾爪齒隙、感測器滑動或彈性形變引起，建議複測或更換平整夾持點。")
+        print("  [提示] R^2 偏低，可能是夾爪齒隙、感測器滑動或彈性形變引起，建議複測或更換平整夾持點。")
     print("=" * 75)
 
     # 儲存校正參數

@@ -41,7 +41,7 @@ def main():
     fps = merged.fps
     print(f"合併資料集：{merged.meta.total_episodes} 集 {merged.meta.total_frames} 幀；原始 {len(eps)} 集")
     if merged.meta.total_episodes != len(eps):
-        print("✗ 集數不符，停止")
+        print("[FAIL] 集數不符，停止")
         return
 
     n_bad = 0
@@ -89,14 +89,14 @@ def main():
                 if diff > PIXEL_TOL:
                     problems.append(f"frame {k} {cam} 影像不同（平均差 {diff:.4f}）")
 
-        mark = "✗" if problems else "✓"
+        mark = "[FAIL]" if problems else "[OK]"
         n_bad += bool(problems)
         print(f"{mark} merged ep {i:2d} ← {d.name}  {n_m} 幀  抽查 {len(idxs)} 幀")
         for p in problems:
             print(f"    {p}")
 
     print(f"\n原始總幀數 {total_src}，合併總幀數 {merged.meta.total_frames}"
-          + ("  ✓" if total_src == merged.meta.total_frames else "  ✗ 不符"))
+          + ("  [OK]" if total_src == merged.meta.total_frames else "  [FAIL] 不符"))
     print(f"總結：{len(eps) - n_bad}/{len(eps)} 集通過" + ("" if n_bad else "，可以上傳"))
 
 
