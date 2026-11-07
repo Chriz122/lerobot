@@ -233,6 +233,27 @@ def parse_force_monitor_flag(args: list[str]) -> tuple[bool, str | None, list[st
     return monitor_force, arduino_port, cleaned
 
 
+def parse_task_slot_flags(args: list[str]) -> tuple[str | None, list[str]]:
+    """從命令列參數中解析並抽離 --task 與 --slots 參數。"""
+    cleaned = []
+    task_or_path = None
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg.startswith("--task=") or arg.startswith("-task="):
+            task_or_path = arg.split("=", 1)[1].strip()
+        elif arg.startswith("--slots=") or arg.startswith("-slots="):
+            task_or_path = arg.split("=", 1)[1].strip()
+        elif arg in ("--task", "-task", "--slots", "-slots"):
+            if i + 1 < len(args) and not args[i + 1].startswith("-"):
+                task_or_path = args[i + 1].strip()
+                i += 1
+        else:
+            cleaned.append(arg)
+        i += 1
+    return task_or_path, cleaned
+
+
 def run_cli_mode(mode: str, rest: list[str]):
     if mode == "check":
         run_check(rest)
@@ -240,6 +261,13 @@ def run_cli_mode(mode: str, rest: list[str]):
     if mode == "home":
         run_home(rest)
         return
+    if mode == "teach-slots":
+        from openarm_src.utils.slot_teacher import run_teach_slots
+        run_teach_slots(rest)
+        return
+
+    # 解析並抽離 --task / --slots
+    task_or_path, rest = parse_task_slot_flags(rest)
 
     # 解析並過濾 --bilateral 參數，避免傳給 LeRobot 引發不認識參數的錯誤
     _, cleaned_rest = parse_bilateral_flag(rest)
@@ -249,18 +277,28 @@ def run_cli_mode(mode: str, rest: list[str]):
     parse_force_monitor_flag(cleaned_rest)
 
     install_patches()
-    sys.argv = [f"lerobot-{mode}"] + cleaned_rest
-    if mode == "record":
+    if mode == "record-hybrid":
+        sys.argv = ["lerobot-record"] + cleaned_rest
+        from lerobot.scripts import lerobot_record
+        from openarm_src.utils.hybrid_recorder import patch_hybrid_record
+
+        patch_record_loop(lerobot_record)
+        patch_hybrid_record(lerobot_record, task_or_path=task_or_path)
+        lerobot_record.main()
+    elif mode == "record":
+        sys.argv = [f"lerobot-{mode}"] + cleaned_rest
         from lerobot.scripts import lerobot_record
 
         patch_record_loop(lerobot_record)
         lerobot_record.main()
     elif mode == "rollout":
+        sys.argv = [f"lerobot-{mode}"] + cleaned_rest
         from lerobot.scripts import lerobot_rollout
 
         patch_rollout(lerobot_rollout)
         lerobot_rollout.main()
     else:
+        sys.argv = [f"lerobot-{mode}"] + cleaned_rest
         from lerobot.scripts import lerobot_teleoperate
 
         patch_teleop_loop(lerobot_teleoperate)

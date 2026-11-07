@@ -64,6 +64,10 @@ from openarm_src.utils.safety import (
     unregister_arm,
 )
 from openarm_src.utils.step_guard import StepJumpGuard
+from openarm_src.utils.kinematics import CartesianPerturbator
+from openarm_src.utils.slot_teacher import get_task_slot_path, run_teach_slots
+from openarm_src.utils.trajectory_planner import generate_slot_placement_trajectory, interpolate_poses
+from openarm_src.utils.hybrid_recorder import patch_hybrid_record, resolve_slots_config
 
 __all__ = [
     "ARM_JOINTS",
@@ -98,21 +102,27 @@ __all__ = [
     "can_teardown",
     "final_safety_net",
     "follower_park",
+    "generate_slot_placement_trajectory",
     "get_can_ifaces",
     "get_leaders",
+    "get_task_slot_path",
     "go_home",
     "install_patches",
+    "interpolate_poses",
     "load_home_config",
     "load_waypoints",
     "min_jerk",
     "patch_follower_park",
     "patch_gripper_monitor",
+    "patch_hybrid_record",
     "patch_record_loop",
     "patch_rollout",
     "register_arm",
+    "resolve_slots_config",
     "run_check",
     "run_cli_mode",
     "run_home",
+    "run_teach_slots",
     "safe_disable",
     "unregister_arm",
 ]

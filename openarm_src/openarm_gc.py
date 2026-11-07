@@ -31,6 +31,12 @@ Gravity compensation for OpenArm leader arms + home pose before every episode.
   # 4) HIL / DAgger (參數與 lerobot-rollout 相同；設了 OPENARM_HOME 會在 policy 開始前先 home 一次)
   python openarm_gc.py rollout --strategy.type=dagger --policy.path=... --teleop.type=bi_openarm_leader ...
 
+  # 5) 示教托盤多槽位 Waypoints (依任務儲存至 tasks/<task_name>/tray_slots.json)
+  python openarm_gc.py teach-slots --task teabag_4slots --slots 4
+
+  # 6) 切換式混合錄製 (Teleop 抓取 + 按鍵觸發 Script 放置，自動載入 tasks/<task_name>/tray_slots.json)
+  python openarm_gc.py record-hybrid --task teabag_4slots --robot.type=bi_openarm_follower ... --teleop.type=bi_openarm_leader ...
+
   # 力回饋雙向控制開關 (Bilateral teleoperation)
   --bilateral=true / --bilateral=false (在 record 或 teleoperate 時可用，預設依 OPENARM_FF_SCALE 決定)
 
@@ -102,7 +108,8 @@ logger = logging.getLogger("openarm_gc")
 
 def main():
     logging.basicConfig(level=logging.INFO)
-    if len(sys.argv) < 2 or sys.argv[1] not in ("record", "teleoperate", "rollout", "check", "home"):
+    valid_modes = ("record", "teleoperate", "rollout", "check", "home", "teach-slots", "record-hybrid")
+    if len(sys.argv) < 2 or sys.argv[1] not in valid_modes:
         print(__doc__)
         sys.exit(1)
     mode, rest = sys.argv[1], sys.argv[2:]

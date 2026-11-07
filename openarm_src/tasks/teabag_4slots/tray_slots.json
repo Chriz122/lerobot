@@ -1,0 +1,157 @@
+{
+  "task": "teabag_4slots",
+  "created_at": "2026-11-08 01:15:00",
+  "num_slots": 4,
+  "approach_offset_deg": 12.0,
+  "gripper_open_deg": 30.0,
+  "slots": {
+    "1": {
+      "slot_id": 1,
+      "name": "Slot_1_Front_Left",
+      "approach": {
+        "left_joint_1.pos": -10.0,
+        "left_joint_2.pos": 8.0,
+        "left_joint_3.pos": 35.0,
+        "left_joint_4.pos": 45.0,
+        "left_joint_5.pos": 0.0,
+        "left_joint_6.pos": 15.0,
+        "left_joint_7.pos": 0.0,
+        "left_gripper.pos": 15.0
+      },
+      "place": {
+        "left_joint_1.pos": -10.0,
+        "left_joint_2.pos": 20.0,
+        "left_joint_3.pos": 35.0,
+        "left_joint_4.pos": 45.0,
+        "left_joint_5.pos": 0.0,
+        "left_joint_6.pos": 15.0,
+        "left_joint_7.pos": 0.0,
+        "left_gripper.pos": 15.0
+      },
+      "release": {
+        "left_gripper.pos": 30.0
+      },
+      "retract": {
+        "left_joint_1.pos": -10.0,
+        "left_joint_2.pos": 8.0,
+        "left_joint_3.pos": 35.0,
+        "left_joint_4.pos": 45.0,
+        "left_joint_5.pos": 0.0,
+        "left_joint_6.pos": 15.0,
+        "left_joint_7.pos": 0.0,
+        "left_gripper.pos": 30.0
+      }
+    },
+    "2": {
+      "slot_id": 2,
+      "name": "Slot_2_Front_Right",
+      "approach": {
+        "left_joint_1.pos": 5.0,
+        "left_joint_2.pos": 8.0,
+        "left_joint_3.pos": 35.0,
+        "left_joint_4.pos": 45.0,
+        "left_joint_5.pos": 0.0,
+        "left_joint_6.pos": 15.0,
+        "left_joint_7.pos": 0.0,
+        "left_gripper.pos": 15.0
+      },
+      "place": {
+        "left_joint_1.pos": 5.0,
+        "left_joint_2.pos": 20.0,
+        "left_joint_3.pos": 35.0,
+        "left_joint_4.pos": 45.0,
+        "left_joint_5.pos": 0.0,
+        "left_joint_6.pos": 15.0,
+        "left_joint_7.pos": 0.0,
+        "left_gripper.pos": 15.0
+      },
+      "release": {
+        "left_gripper.pos": 30.0
+      },
+      "retract": {
+        "left_joint_1.pos": 5.0,
+        "left_joint_2.pos": 8.0,
+        "left_joint_3.pos": 35.0,
+        "left_joint_4.pos": 45.0,
+        "left_joint_5.pos": 0.0,
+        "left_joint_6.pos": 15.0,
+        "left_joint_7.pos": 0.0,
+        "left_gripper.pos": 30.0
+      }
+    },
+    "3": {
+      "slot_id": 3,
+      "name": "Slot_3_Back_Left",
+      "approach": {
+        "left_joint_1.pos": -10.0,
+        "left_joint_2.pos": -2.0,
+        "left_joint_3.pos": 45.0,
+        "left_joint_4.pos": 50.0,
+        "left_joint_5.pos": 0.0,
+        "left_joint_6.pos": 15.0,
+        "left_joint_7.pos": 0.0,
+        "left_gripper.pos": 15.0
+      },
+      "place": {
+        "left_joint_1.pos": -10.0,
+        "left_joint_2.pos": 10.0,
+        "left_joint_3.pos": 45.0,
+        "left_joint_4.pos": 50.0,
+        "left_joint_5.pos": 0.0,
+        "left_joint_6.pos": 15.0,
+        "left_joint_7.pos": 0.0,
+        "left_gripper.pos": 15.0
+      },
+      "release": {
+        "left_gripper.pos": 30.0
+      },
+      "retract": {
+        "left_joint_1.pos": -10.0,
+        "left_joint_2.pos": -2.0,
+        "left_joint_3.pos": 45.0,
+        "left_joint_4.pos": 50.0,
+        "left_joint_5.pos": 0.0,
+        "left_joint_6.pos": 15.0,
+        "left_joint_7.pos": 0.0,
+        "left_gripper.pos": 30.0
+      }
+    },
+    "4": {
+      "slot_id": 4,
+      "name": "Slot_4_Back_Right",
+      "approach": {
+        "left_joint_1.pos": 5.0,
+        "left_joint_2.pos": -2.0,
+        "left_joint_3.pos": 45.0,
+        "left_joint_4.pos": 50.0,
+        "left_joint_5.pos": 0.0,
+        "left_joint_6.pos": 15.0,
+        "left_joint_7.pos": 0.0,
+        "left_gripper.pos": 15.0
+      },
+      "place": {
+        "left_joint_1.pos": 5.0,
+        "left_joint_2.pos": 10.0,
+        "left_joint_3.pos": 45.0,
+        "left_joint_4.pos": 50.0,
+        "left_joint_5.pos": 0.0,
+        "left_joint_6.pos": 15.0,
+        "left_joint_7.pos": 0.0,
+        "left_gripper.pos": 15.0
+      },
+      "release": {
+        "left_gripper.pos": 30.0
+      },
+      "retract": {
+        "left_joint_1.pos": 5.0,
+        "left_joint_2.pos": -2.0,
+        "left_joint_3.pos": 45.0,
+        "left_joint_4.pos": 50.0,
+        "left_joint_5.pos": 0.0,
+        "left_joint_6.pos": 15.0,
+        "left_joint_7.pos": 0.0,
+        "left_gripper.pos": 30.0
+      }
+    }
+  }
+}
