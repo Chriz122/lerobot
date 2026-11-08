@@ -9,14 +9,14 @@ def approx(a, b, tol=1e-5):
 def test_step_guard_clamp_normal():
     guard = StepJumpGuard(max_step_deg=4.0, max_step_gripper=15.0, enabled=True)
 
-    # Initial state
+    # 初始狀態
     guard.sync_from_observation({
         "left_joint_1.pos": 10.0,
         "left_joint_2.pos": 20.0,
         "left_gripper.pos": 50.0,
     })
 
-    # Small movement: within 4.0 degrees
+    # 小幅度移動：在 4.0 度內
     act = {
         "left_joint_1.pos": 12.0,  # +2.0
         "left_joint_2.pos": 18.5,  # -1.5
@@ -37,7 +37,7 @@ def test_step_guard_large_jump_clamping():
         "left_gripper.pos": 0.0,
     })
 
-    # Policy predicts a huge step jump (+20.0 degrees)
+    # 預測一個大幅度跳躍，超過 max_step 限制
     act = {
         "left_joint_1.pos": 20.0,
         "left_joint_2.pos": -25.0,
@@ -45,12 +45,12 @@ def test_step_guard_large_jump_clamping():
     }
     clamped = guard.clamp(act)
 
-    # Should be clamped to +- max_step
+    # 應該被限制在 +- max_step
     assert approx(clamped["left_joint_1.pos"], 4.0)
     assert approx(clamped["left_joint_2.pos"], -4.0)
     assert approx(clamped["left_gripper.pos"], 15.0)
 
-    # Next step: policy still wants 20.0
+    # 下一步：policy 仍然想要 20.0，但 guard 應該從上一步的 clamped 狀態出發
     clamped2 = guard.clamp(act)
     assert approx(clamped2["left_joint_1.pos"], 8.0)
     assert approx(clamped2["left_joint_2.pos"], -8.0)
