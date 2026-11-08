@@ -52,17 +52,19 @@ DISABLE_RETRY = int(os.environ.get("OPENARM_DISABLE_RETRY", "3"))
 ENABLE_RETRY = max(int(os.environ.get("OPENARM_ENABLE_RETRY", "3")), 1)
 
 # 力回饋參數 / Force feedback tunables
-DEFAULT_FORCE_FEEDBACK_SCALE = 0.05
-DEFAULT_FORCE_FEEDBACK_LIMIT = 0.2
-DEFAULT_FORCE_FEEDBACK_ALPHA = 0.6
-DEFAULT_FORCE_FEEDBACK_DEADBAND = 0.02
+DEFAULT_FORCE_FEEDBACK_SCALE = float(os.environ.get("OPENARM_FF_SCALE", "0.05"))
+DEFAULT_FORCE_FEEDBACK_LIMIT = abs(float(os.environ.get("OPENARM_FF_LIMIT", "0.2")))
+DEFAULT_FORCE_FEEDBACK_ALPHA = min(max(float(os.environ.get("OPENARM_FF_ALPHA", "0.6")), 0.0), 1.0)
+DEFAULT_FORCE_FEEDBACK_DEADBAND = abs(float(os.environ.get("OPENARM_FF_DEADBAND", "0.02")))
 
 # 關節步長防跳保護參數 / Step Jump Guard tunables
+DEFAULT_STEP_GUARD_ENABLE = os.environ.get("OPENARM_STEP_GUARD", "1") != "0"
 DEFAULT_MAX_STEP_DEG = float(os.environ.get("OPENARM_MAX_STEP_DEG", "4.0"))          # 每拍最大容許關節移動度數 (30 FPS 下相當於 120 deg/s)
 DEFAULT_MAX_STEP_GRIPPER_DEG = float(os.environ.get("OPENARM_MAX_STEP_GRIPPER", "15.0")) # 每拍夾爪最大容許移動度數
 STEP_GUARD_WARN_THROTTLE_S = float(os.environ.get("OPENARM_WARN_THROTTLE_S", "2.0"))      # 告警節流間隔 (秒)
 
 # 托盤槽位放置與夾爪擾動參數 / Slot placement & perturbation tunables
+DEFAULT_SLOT_NOISE_ENABLE = os.environ.get("OPENARM_SLOT_NOISE", "1") != "0"
 DEFAULT_SLOT_MAX_XY_MM = float(os.environ.get("OPENARM_SLOT_MAX_XY_MM", "4.0"))
 DEFAULT_SLOT_MAX_Z_MM = float(os.environ.get("OPENARM_SLOT_MAX_Z_MM", "1.0"))
 DEFAULT_SLOT_MAX_YAW_DEG = float(os.environ.get("OPENARM_SLOT_MAX_YAW_DEG", "2.5"))
@@ -93,6 +95,8 @@ DEFAULT_FOLLOWER_LEFT_PORT = os.environ.get("OPENARM_FOLLOWER_LEFT_PORT", "can1"
 DEFAULT_FOLLOWER_RIGHT_PORT = os.environ.get("OPENARM_FOLLOWER_RIGHT_PORT", "can0")
 
 DEFAULT_CAN_IFACES = [x.strip() for x in os.environ.get("OPENARM_CAN_IFACES", "can0,can1,can2,can3").split(",") if x.strip()]
+DEFAULT_CAN_SETUP_ENABLE = os.environ.get("OPENARM_CAN_SETUP", "1") != "0"
+DEFAULT_CAN_DOWN_ENABLE = os.environ.get("OPENARM_CAN_DOWN", "0") == "1"
 DEFAULT_CAN_BITRATE = int(os.environ.get("OPENARM_CAN_BITRATE", "1000000"))
 DEFAULT_CAN_DATA_BITRATE = int(os.environ.get("OPENARM_CAN_DATA_BITRATE", "5000000"))
 
@@ -104,6 +108,7 @@ OPENARM_FOREARM_LEN_M = float(os.environ.get("OPENARM_FOREARM_LEN_M", "0.33"))
 OPENARM_GRIPPER_LEN_M = float(os.environ.get("OPENARM_GRIPPER_LEN_M", "0.15"))
 
 # 安全與 Homing 參數 / Safety & Homing tunables
+DEFAULT_TABLE_Z = float(os.environ["OPENARM_TABLE_Z"]) if "OPENARM_TABLE_Z" in os.environ else None
 DEFAULT_TABLE_MARGIN_M = float(os.environ.get("OPENARM_TABLE_MARGIN", "0.05"))
 DEFAULT_HOME_TIME_S = float(os.environ.get("OPENARM_HOME_TIME", "4.0"))
 DEFAULT_PARK_ENABLE = os.environ.get("OPENARM_PARK", "1") != "0"
@@ -111,18 +116,28 @@ DEFAULT_PARK_TIME_S = float(os.environ.get("OPENARM_PARK_TIME", "3.0"))
 DEFAULT_HOMING_RATE_HZ = float(os.environ.get("OPENARM_HOMING_RATE_HZ", "50.0"))
 DEFAULT_HOME_AT = os.environ.get("OPENARM_HOME_AT", "record")
 DEFAULT_RESET_FILE = os.environ.get("OPENARM_HOME", "reset.json")
+DEFAULT_HOME_PATH = os.environ.get("OPENARM_HOME", None)
 
 # 評估與實機測試參數 / Evaluation tunables
 DEFAULT_EVAL_TRIALS = int(os.environ.get("OPENARM_EVAL_TRIALS", "10"))
 DEFAULT_EVAL_DURATION_S = float(os.environ.get("OPENARM_EVAL_DURATION_S", "45.0"))
 DEFAULT_EVAL_LOG_FILE = os.environ.get("OPENARM_EVAL_LOG_FILE", "eval_results.csv")
 
-# WebRTC 實時串流
+# WebRTC 實時串流與力矩監控
+DEFAULT_WEBRTC_ENABLE = os.environ.get("OPENARM_WEBRTC", "0") == "1"
 DEFAULT_WEBRTC_PORT = int(os.environ.get("OPENARM_WEBRTC_PORT", "8080"))
+DEFAULT_FORCE_MONITOR_ENABLE = os.environ.get("OPENARM_FORCE_MONITOR", "0") == "1"
+DEFAULT_ARDUINO_PORT = os.environ.get("OPENARM_ARDUINO_PORT", None)
 
 # 重力補償與力回饋通用擴充
+DEFAULT_CONTROL_HZ = float(os.environ.get("OPENARM_CONTROL_HZ", str(CONTROL_HZ)))
 DEFAULT_GC_SCALE = float(os.environ.get("OPENARM_GC_SCALE", "1.0"))
 DEFAULT_KD_SCALE = float(os.environ.get("OPENARM_KD_SCALE", "1.0"))
 DEFAULT_FRICTION_SCALE = float(os.environ.get("OPENARM_FRICTION_SCALE", "0.0"))
+DEFAULT_FRICTION_EPS = float(os.environ.get("OPENARM_FRICTION_EPS", str(FRICTION_VEL_EPS)))
+DEFAULT_GC_STATS_ENABLE = os.environ.get("OPENARM_GC_STATS", "1") != "0"
+DEFAULT_LEADER_SIDE = os.environ.get("OPENARM_LEADER_SIDE", None)
+DEFAULT_LEADER_TRACK_ENABLE = os.environ.get("OPENARM_LEADER_TRACK", "1") != "0"
+DEFAULT_PROFILE_ENABLE = os.environ.get("OPENARM_PROFILE", "1") != "0"
 DEFAULT_FF_SIGN = float(os.environ.get("OPENARM_FF_SIGN", "-1.0"))
 

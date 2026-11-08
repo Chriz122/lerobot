@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
-import os
 import subprocess
 import sys
 import time
@@ -10,7 +9,9 @@ import time
 from openarm_src.utils.config import (
     DEFAULT_CAN_BITRATE,
     DEFAULT_CAN_DATA_BITRATE,
+    DEFAULT_CAN_DOWN_ENABLE,
     DEFAULT_CAN_IFACES,
+    DEFAULT_CAN_SETUP_ENABLE,
     MOTOR_NAMES,
 )
 
@@ -18,8 +19,6 @@ logger = logging.getLogger("openarm_gc.can_mgr")
 
 
 def get_can_ifaces() -> list[str]:
-    if "OPENARM_CAN_IFACES" in os.environ:
-        return [x.strip() for x in os.environ["OPENARM_CAN_IFACES"].split(",") if x.strip()]
     return list(DEFAULT_CAN_IFACES)
 
 
@@ -80,7 +79,7 @@ def can_setup_and_check(max_tries: int = 3):
     """打開 CAN 介面並測試每條 bus 的 8 顆馬達。
     已在 UP 狀態的介面會直接沿用，不需重複 down/up 造成硬體重置與掉包。
     4 條 bus 採多執行緒平行檢測，收到回應即刻返回，將啟動時間從 70+ 秒降為毫秒級。"""
-    if os.environ.get("OPENARM_CAN_SETUP", "1") == "0":
+    if not DEFAULT_CAN_SETUP_ENABLE:
         return
 
     ifaces = get_can_ifaces()
@@ -146,7 +145,7 @@ def can_setup_and_check(max_tries: int = 3):
 
 
 def can_teardown():
-    if os.environ.get("OPENARM_CAN_DOWN", "0") != "1":
+    if not DEFAULT_CAN_DOWN_ENABLE:
         return
     for iface in get_can_ifaces():
         r = subprocess.run(["ip", "link", "set", iface, "down"], capture_output=True, text=True)

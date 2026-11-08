@@ -6,7 +6,12 @@ from pathlib import Path
 import threading
 from typing import Any
 
-from openarm_src.utils.config import DEFAULT_TASK_NAME, DEFAULT_TRAJ_FPS
+from openarm_src.utils.config import (
+    DEFAULT_SLOT_NOISE_ENABLE,
+    DEFAULT_TASK_NAME,
+    DEFAULT_TRAJ_FPS,
+    DEFAULT_URDF_PATH,
+)
 from openarm_src.utils.homing import get_leaders
 from openarm_src.utils.slot_teacher import get_task_slot_path
 from openarm_src.utils.step_guard import StepJumpGuard
@@ -101,9 +106,9 @@ def patch_hybrid_record(module, task_or_path: str | None = None):
 
         from openarm_src.utils.kinematics import CartesianPerturbator
 
-        perturb_enabled = os.environ.get("OPENARM_SLOT_NOISE", "1") != "0"
+        perturb_enabled = DEFAULT_SLOT_NOISE_ENABLE
         perturbator = (
-            CartesianPerturbator(urdf_path=os.environ.get("OPENARM_URDF", None))
+            CartesianPerturbator(urdf_path=DEFAULT_URDF_PATH)
             if perturb_enabled
             else None
         )

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import logging
-import os
 import time
 from typing import Any
 
 from openarm_src.utils.config import (
     DEFAULT_MAX_STEP_DEG,
     DEFAULT_MAX_STEP_GRIPPER_DEG,
+    DEFAULT_STEP_GUARD_ENABLE,
     STEP_GUARD_WARN_THROTTLE_S,
 )
 
@@ -31,17 +31,15 @@ class StepJumpGuard:
         enabled: bool | None = None,
     ) -> None:
         if enabled is None:
-            enabled = os.environ.get("OPENARM_STEP_GUARD", "1") != "0"
+            enabled = DEFAULT_STEP_GUARD_ENABLE
         self.enabled = bool(enabled)
 
         if max_step_deg is None:
-            max_step_deg = float(os.environ.get("OPENARM_MAX_STEP_DEG", str(DEFAULT_MAX_STEP_DEG)))
+            max_step_deg = DEFAULT_MAX_STEP_DEG
         self.max_step_deg = float(max_step_deg)
 
         if max_step_gripper is None:
-            max_step_gripper = float(
-                os.environ.get("OPENARM_MAX_STEP_GRIPPER", str(DEFAULT_MAX_STEP_GRIPPER_DEG))
-            )
+            max_step_gripper = DEFAULT_MAX_STEP_GRIPPER_DEG
         self.max_step_gripper = float(max_step_gripper)
 
         self.last_action: dict[str, float] = {}

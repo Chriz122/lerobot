@@ -1,26 +1,27 @@
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import time
 import numpy as np
 
 from openarm_src.utils.config import (
     ARM_JOINTS,
-    CONTROL_HZ,
+    DEFAULT_CONTROL_HZ,
     DEFAULT_FF_SIGN,
     DEFAULT_FORCE_FEEDBACK_ALPHA,
     DEFAULT_FORCE_FEEDBACK_DEADBAND,
     DEFAULT_FORCE_FEEDBACK_LIMIT,
     DEFAULT_FORCE_FEEDBACK_SCALE,
+    DEFAULT_FRICTION_EPS,
     DEFAULT_FRICTION_SCALE,
     DEFAULT_GC_SCALE,
+    DEFAULT_GC_STATS_ENABLE,
     DEFAULT_KD_SCALE,
+    DEFAULT_URDF_PATH,
     DISABLE_RETRY,
     ENABLE_RETRY,
     FRICTION_COMP,
-    FRICTION_VEL_EPS,
     GC_KD,
     GRIPPER,
     GRIPPER_HOLD_KD,
@@ -42,21 +43,19 @@ class LeaderGC:
     def __init__(self, leader, side: str | None):
         self.leader = leader
         self.bus = leader.bus
-        self.gm = GravityModel(os.environ["OPENARM_URDF"], side)
-        self.scale = float(os.environ.get("OPENARM_GC_SCALE", str(DEFAULT_GC_SCALE)))
-        self.kd_scale = float(os.environ.get("OPENARM_KD_SCALE", str(DEFAULT_KD_SCALE)))
-        self.fric_scale = float(os.environ.get("OPENARM_FRICTION_SCALE", str(DEFAULT_FRICTION_SCALE)))
-        self.fric_eps = float(os.environ.get("OPENARM_FRICTION_EPS", str(FRICTION_VEL_EPS)))
+        self.gm = GravityModel(DEFAULT_URDF_PATH, side)
+        self.scale = DEFAULT_GC_SCALE
+        self.kd_scale = DEFAULT_KD_SCALE
+        self.fric_scale = DEFAULT_FRICTION_SCALE
+        self.fric_eps = DEFAULT_FRICTION_EPS
         # 力回饋參數
-        self.ff_scale = float(os.environ.get("OPENARM_FF_SCALE", str(DEFAULT_FORCE_FEEDBACK_SCALE)))
-        self.ff_sign = float(os.environ.get("OPENARM_FF_SIGN", str(DEFAULT_FF_SIGN)))
-        self.ff_limit = abs(float(os.environ.get("OPENARM_FF_LIMIT", DEFAULT_FORCE_FEEDBACK_LIMIT)))
-        self.ff_alpha = min(
-            max(float(os.environ.get("OPENARM_FF_ALPHA", DEFAULT_FORCE_FEEDBACK_ALPHA)), 0.0), 1.0
-        )
-        self.ff_deadband = abs(float(os.environ.get("OPENARM_FF_DEADBAND", DEFAULT_FORCE_FEEDBACK_DEADBAND)))
-        self.hz = float(os.environ.get("OPENARM_CONTROL_HZ", str(CONTROL_HZ)))
-        self.stats_on = os.environ.get("OPENARM_GC_STATS", "1") != "0"
+        self.ff_scale = DEFAULT_FORCE_FEEDBACK_SCALE
+        self.ff_sign = DEFAULT_FF_SIGN
+        self.ff_limit = DEFAULT_FORCE_FEEDBACK_LIMIT
+        self.ff_alpha = DEFAULT_FORCE_FEEDBACK_ALPHA
+        self.ff_deadband = DEFAULT_FORCE_FEEDBACK_DEADBAND
+        self.hz = DEFAULT_CONTROL_HZ
+        self.stats_on = DEFAULT_GC_STATS_ENABLE
         self.lock = threading.Lock()
         self.target: dict[str, float] | None = None  # None = 純重力補償
         self.feedback_source = None

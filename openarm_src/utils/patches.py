@@ -8,12 +8,20 @@ import time
 
 from openarm_src.utils.config import (
     ARM_JOINTS,
+    DEFAULT_ARDUINO_PORT,
     DEFAULT_FF_SIGN,
     DEFAULT_FORCE_FEEDBACK_LIMIT,
     DEFAULT_FORCE_FEEDBACK_SCALE,
+    DEFAULT_FORCE_MONITOR_ENABLE,
     DEFAULT_HOME_AT,
+    DEFAULT_HOME_PATH,
+    DEFAULT_LEADER_SIDE,
+    DEFAULT_LEADER_TRACK_ENABLE,
     DEFAULT_PARK_ENABLE,
     DEFAULT_PARK_TIME_S,
+    DEFAULT_PROFILE_ENABLE,
+    DEFAULT_URDF_PATH,
+    DEFAULT_WEBRTC_ENABLE,
     DEFAULT_WEBRTC_PORT,
 )
 from openarm_src.utils.homing import (
@@ -40,7 +48,7 @@ def _call_arguments(function, args, kwargs):
 
 def bind_force_feedback(robot, teleop) -> None:
     """連接 follower 與 leader：leader._gc.set_feedback_source(follower)"""
-    ff_scale = float(os.environ.get("OPENARM_FF_SCALE", DEFAULT_FORCE_FEEDBACK_SCALE))
+    ff_scale = DEFAULT_FORCE_FEEDBACK_SCALE
     if ff_scale <= 0:
         return
 
@@ -69,8 +77,8 @@ def bind_force_feedback(robot, teleop) -> None:
     logger.info(
         "[gc] 力回饋已開啟 (比例=%.3g, 正負號=%+.0f, 上限=%.3g Nm)",
         ff_scale,
-        float(os.environ.get("OPENARM_FF_SIGN", str(DEFAULT_FF_SIGN))),
-        abs(float(os.environ.get("OPENARM_FF_LIMIT", DEFAULT_FORCE_FEEDBACK_LIMIT))),
+        DEFAULT_FF_SIGN,
+        DEFAULT_FORCE_FEEDBACK_LIMIT,
     )
 
 DAMIAO_ERROR_CODES: dict[int, str] = {
@@ -216,7 +224,7 @@ def _park_path(current: dict[str, float]) -> list[dict[str, float]]:
     """回下垂(零點)的路徑：若有 reset.json，先反向經過中繼點(抬手姿態)，再回零點，避免掃到桌子。"""
     zero = {k: 0.0 for k in current}
     path = []
-    home_path = os.environ.get("OPENARM_HOME")
+    home_path = DEFAULT_HOME_PATH
     if home_path and os.path.exists(home_path):
         wps = load_waypoints(home_path)
         for wp in reversed(wps[:-1]):  # 中繼點反向 (不含最後的起始姿態)
@@ -227,7 +235,7 @@ def _park_path(current: dict[str, float]) -> list[dict[str, float]]:
 
 def follower_park(arm, prefix: str = "", duration_per_seg: float | None = None):
     """單支 OpenArmFollower 慢慢回到下垂姿態 (MIT 位置控制)，之後才讓 LeRobot 關力矩。"""
-    T = duration_per_seg or float(os.environ.get("OPENARM_PARK_TIME", str(DEFAULT_PARK_TIME_S)))
+    T = duration_per_seg or DEFAULT_PARK_TIME_S
     present = arm.bus.sync_read("Present_Position")
     cur = {f"{prefix}{m}.pos": float(v) for m, v in present.items()}
     for seg in _park_path(cur):
@@ -253,7 +261,7 @@ def bimanual_disconnect(self):
             raise _SkipPark()
 
         logger.info(f"[gc] 正在將雙{label}回位至下垂姿態...")
-        T = float(os.environ.get("OPENARM_PARK_TIME", str(DEFAULT_PARK_TIME_S)))
+        T = DEFAULT_PARK_TIME_S
         cur = {}
 
         if is_leader:
@@ -362,7 +370,7 @@ def install_patches():
     from lerobot.teleoperators.bi_openarm_leader import BiOpenArmLeader
     from lerobot.teleoperators.openarm_leader import OpenArmLeader
 
-    if "OPENARM_URDF" not in os.environ:
+    if not DEFAULT_URDF_PATH:
         sys.exit("請先 export OPENARM_URDF=/path/to/openarm_bimanual.urdf")
 
     orig_bi_init = BiOpenArmLeader.__init__
@@ -380,7 +388,7 @@ def install_patches():
         orig_connect(self, calibrate)
         register_arm(self)
         self._parked = False
-        side = getattr(self, "_gc_side", None) or os.environ.get("OPENARM_LEADER_SIDE")
+        side = getattr(self, "_gc_side", None) or DEFAULT_LEADER_SIDE
         self._gc = LeaderGC(self, side)
         self._gc.start()
         logger.info(f"[gc] {self} 重力補償已開啟 (側別={side})")
@@ -409,7 +417,7 @@ def install_patches():
                 # 先慢慢垂回零點 (重力中性姿態)，再關力矩，避免手臂直接摔下
                 try:
                     logger.info(f"[gc] {self}: 關閉力矩前先回到下垂姿態")
-                    T = float(os.environ.get("OPENARM_PARK_TIME", str(DEFAULT_PARK_TIME_S)))
+                    T = DEFAULT_PARK_TIME_S
                     gc.move_to({m: 0.0 for m in ARM_JOINTS}, T)
                     time.sleep(0.3)
                 except Exception as e:  # noqa: BLE001
@@ -451,13 +459,13 @@ def install_patches():
 
 def patch_record_loop(module):
     waypoints, duration, guard = load_home_config()
-    when = os.environ.get("OPENARM_HOME_AT", DEFAULT_HOME_AT)  # "record" 或 "reset"
-    profiler = LoopProfiler() if os.environ.get("OPENARM_PROFILE", "1") != "0" else None
+    when = DEFAULT_HOME_AT  # "record" 或 "reset"
+    profiler = LoopProfiler() if DEFAULT_PROFILE_ENABLE else None
 
     streamer = None
-    if os.environ.get("OPENARM_WEBRTC", "0") == "1":
+    if DEFAULT_WEBRTC_ENABLE:
         from openarm_src.utils.webrtc_streamer import get_webrtc_streamer
-        port = int(os.environ.get("OPENARM_WEBRTC_PORT", str(DEFAULT_WEBRTC_PORT)))
+        port = DEFAULT_WEBRTC_PORT
         streamer = get_webrtc_streamer(port=port)
         streamer.start()
 
@@ -488,15 +496,15 @@ def patch_record_loop(module):
 def patch_teleop_loop(module):
     """Bind follower state to leader force feedback after both devices connect."""
     streamer = None
-    if os.environ.get("OPENARM_WEBRTC", "0") == "1":
+    if DEFAULT_WEBRTC_ENABLE:
         from openarm_src.utils.webrtc_streamer import get_webrtc_streamer
-        port = int(os.environ.get("OPENARM_WEBRTC_PORT", str(DEFAULT_WEBRTC_PORT)))
+        port = DEFAULT_WEBRTC_PORT
         streamer = get_webrtc_streamer(port=port)
         streamer.start()
 
     arduino_reader = None
-    if os.environ.get("OPENARM_FORCE_MONITOR", "0") == "1":
-        arduino_port = os.environ.get("OPENARM_ARDUINO_PORT")
+    if DEFAULT_FORCE_MONITOR_ENABLE:
+        arduino_port = DEFAULT_ARDUINO_PORT
         if arduino_port:
             try:
                 from openarm_src.test.test_gripper_force import ArduinoReader
@@ -519,7 +527,7 @@ def patch_teleop_loop(module):
             bind_force_feedback(robot, teleop)
 
         # 掛載實時力矩與 Arduino 壓力印出
-        if os.environ.get("OPENARM_FORCE_MONITOR", "0") == "1" and robot is not None:
+        if DEFAULT_FORCE_MONITOR_ENABLE and robot is not None:
             orig_send_action = robot.send_action
             last_print_t = [0.0]
 
@@ -577,7 +585,7 @@ def patch_rollout(module):
     """
     waypoints, duration, guard = load_home_config()
     orig = module.build_rollout_context
-    track_leader = os.environ.get("OPENARM_LEADER_TRACK", "1") != "0"
+    track_leader = DEFAULT_LEADER_TRACK_ENABLE
 
     def build_rollout_context(*args, **kwargs):
         ctx = orig(*args, **kwargs)

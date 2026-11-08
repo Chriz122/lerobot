@@ -7,8 +7,12 @@ import time
 import numpy as np
 
 from openarm_src.utils.config import (
+    DEFAULT_HOME_PATH,
+    DEFAULT_HOME_TIME_S,
     DEFAULT_HOMING_RATE_HZ,
     DEFAULT_TABLE_MARGIN_M,
+    DEFAULT_TABLE_Z,
+    DEFAULT_URDF_PATH,
     JOINT_SIGN,
 )
 
@@ -132,18 +136,18 @@ def go_home(robot, teleop, waypoints: list[dict[str, float]], duration: float, g
 
 def load_home_config():
     """讀 OPENARM_HOME / OPENARM_HOME_TIME / OPENARM_TABLE_Z，回傳 (waypoints, duration, guard)。"""
-    home_path = os.environ.get("OPENARM_HOME")
+    home_path = DEFAULT_HOME_PATH
     if not home_path:
         logger.warning("[gc] OPENARM_HOME 未設定 -> 不做 homing")
         return None, 0.0, None
     waypoints = load_waypoints(home_path)
-    duration = float(os.environ.get("OPENARM_HOME_TIME", str(3 * len(waypoints) + 1)))
+    duration = DEFAULT_HOME_TIME_S if DEFAULT_HOME_TIME_S != 4.0 else float(3 * len(waypoints) + 1)
     guard = None
-    if "OPENARM_TABLE_Z" in os.environ:
+    if DEFAULT_TABLE_Z is not None and DEFAULT_URDF_PATH is not None:
         guard = TableGuard(
-            os.environ["OPENARM_URDF"],
-            float(os.environ["OPENARM_TABLE_Z"]),
-            float(os.environ.get("OPENARM_TABLE_MARGIN", str(DEFAULT_TABLE_MARGIN_M))),
+            DEFAULT_URDF_PATH,
+            DEFAULT_TABLE_Z,
+            DEFAULT_TABLE_MARGIN_M,
         )
     return waypoints, duration, guard
 
