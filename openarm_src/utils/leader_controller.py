@@ -9,10 +9,14 @@ import numpy as np
 from openarm_src.utils.config import (
     ARM_JOINTS,
     CONTROL_HZ,
+    DEFAULT_FF_SIGN,
     DEFAULT_FORCE_FEEDBACK_ALPHA,
     DEFAULT_FORCE_FEEDBACK_DEADBAND,
     DEFAULT_FORCE_FEEDBACK_LIMIT,
     DEFAULT_FORCE_FEEDBACK_SCALE,
+    DEFAULT_FRICTION_SCALE,
+    DEFAULT_GC_SCALE,
+    DEFAULT_KD_SCALE,
     DISABLE_RETRY,
     ENABLE_RETRY,
     FRICTION_COMP,
@@ -39,13 +43,13 @@ class LeaderGC:
         self.leader = leader
         self.bus = leader.bus
         self.gm = GravityModel(os.environ["OPENARM_URDF"], side)
-        self.scale = float(os.environ.get("OPENARM_GC_SCALE", "1.0"))
-        self.kd_scale = float(os.environ.get("OPENARM_KD_SCALE", "1.0"))
-        self.fric_scale = float(os.environ.get("OPENARM_FRICTION_SCALE", "0.0"))
+        self.scale = float(os.environ.get("OPENARM_GC_SCALE", str(DEFAULT_GC_SCALE)))
+        self.kd_scale = float(os.environ.get("OPENARM_KD_SCALE", str(DEFAULT_KD_SCALE)))
+        self.fric_scale = float(os.environ.get("OPENARM_FRICTION_SCALE", str(DEFAULT_FRICTION_SCALE)))
         self.fric_eps = float(os.environ.get("OPENARM_FRICTION_EPS", str(FRICTION_VEL_EPS)))
         # 力回饋參數
-        self.ff_scale = float(os.environ.get("OPENARM_FF_SCALE", DEFAULT_FORCE_FEEDBACK_SCALE))
-        self.ff_sign = float(os.environ.get("OPENARM_FF_SIGN", "-1.0"))
+        self.ff_scale = float(os.environ.get("OPENARM_FF_SCALE", str(DEFAULT_FORCE_FEEDBACK_SCALE)))
+        self.ff_sign = float(os.environ.get("OPENARM_FF_SIGN", str(DEFAULT_FF_SIGN)))
         self.ff_limit = abs(float(os.environ.get("OPENARM_FF_LIMIT", DEFAULT_FORCE_FEEDBACK_LIMIT)))
         self.ff_alpha = min(
             max(float(os.environ.get("OPENARM_FF_ALPHA", DEFAULT_FORCE_FEEDBACK_ALPHA)), 0.0), 1.0

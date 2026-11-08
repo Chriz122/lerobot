@@ -33,6 +33,12 @@ import time
 from collections import Counter, defaultdict
 from datetime import datetime
 
+from openarm_src.utils.config import (
+    DEFAULT_EVAL_DURATION_S,
+    DEFAULT_EVAL_LOG_FILE,
+    DEFAULT_EVAL_TRIALS,
+)
+
 FAIL_MODES = {
     "1": "沒抓到",
     "2": "抓到後掉落",
@@ -147,12 +153,12 @@ def main():
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpts", nargs="+", help="名稱=路徑，例如 200k=/path/to/pretrained_model")
-    ap.add_argument("--trials", type=int, default=10, help="每個 checkpoint 的回合數")
-    ap.add_argument("--duration", type=float, default=45)
+    ap.add_argument("--trials", type=int, default=DEFAULT_EVAL_TRIALS, help="每個 checkpoint 的回合數")
+    ap.add_argument("--duration", type=float, default=DEFAULT_EVAL_DURATION_S)
     ap.add_argument("--n-objects", type=int, default=0, help="每回合物體數（填了會詢問放上幾個）")
     ap.add_argument("--blind", action="store_true", help="測試中不顯示是哪個 checkpoint")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--log", default="eval_results.csv")
+    ap.add_argument("--log", default=DEFAULT_EVAL_LOG_FILE)
     ap.add_argument("--summary", action="store_true", help="只顯示統計")
     a = ap.parse_args(argv)
 

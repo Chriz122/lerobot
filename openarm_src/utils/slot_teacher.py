@@ -7,7 +7,18 @@ import logging
 from pathlib import Path
 import time
 
-from openarm_src.utils.config import ARM_JOINTS, GRIPPER
+from openarm_src.utils.config import (
+    ARM_JOINTS,
+    DEFAULT_APPROACH_OFFSET_DEG,
+    DEFAULT_GRIPPER_MIN_DEG,
+    DEFAULT_LEADER_ID,
+    DEFAULT_LEADER_LEFT_PORT,
+    DEFAULT_LEADER_RIGHT_PORT,
+    DEFAULT_SLOT_FILENAME,
+    DEFAULT_SLOTS_COUNT,
+    DEFAULT_TASK_NAME,
+    GRIPPER,
+)
 from openarm_src.utils.patches import install_patches
 
 logger = logging.getLogger("openarm_gc.slot_teacher")
@@ -15,7 +26,7 @@ logger = logging.getLogger("openarm_gc.slot_teacher")
 DEFAULT_TASKS_ROOT = Path(__file__).resolve().parent.parent / "tasks"
 
 
-def get_task_slot_path(task_name: str, filename: str = "tray_slots.json") -> Path:
+def get_task_slot_path(task_name: str, filename: str = DEFAULT_SLOT_FILENAME) -> Path:
     """取得特定任務的槽位配置檔案路徑: openarm_src/tasks/<task_name>/tray_slots.json"""
     task_dir = DEFAULT_TASKS_ROOT / task_name
     task_dir.mkdir(parents=True, exist_ok=True)
@@ -34,14 +45,14 @@ def run_teach_slots(argv: list[str]) -> None:
     from lerobot.teleoperators.openarm_leader.config_openarm_leader import OpenArmLeaderConfigBase
 
     parser = argparse.ArgumentParser(description="托盤槽位 Waypoint 示教工具 (Teach Slots)")
-    parser.add_argument("--task", default="teabag_4slots", help="任務名稱 (預設: teabag_4slots，將建立專屬任務資料夾)")
-    parser.add_argument("--slots", type=int, default=4, help="槽位數量 (預設: 4)")
+    parser.add_argument("--task", default=DEFAULT_TASK_NAME, help=f"任務名稱 (預設: {DEFAULT_TASK_NAME}，將建立專屬任務資料夾)")
+    parser.add_argument("--slots", type=int, default=DEFAULT_SLOTS_COUNT, help=f"槽位數量 (預設: {DEFAULT_SLOTS_COUNT})")
     parser.add_argument("--save", default=None, help="自訂儲存路徑 (若未指定，預設存至 openarm_src/tasks/<task>/tray_slots.json)")
-    parser.add_argument("--id", default="bi_leader", help="Leader 手臂 ID (讀取校正參數)")
-    parser.add_argument("--left-port", default="can2", help="左臂 CAN 埠號 (預設: can2)")
-    parser.add_argument("--right-port", default="can3", help="右臂 CAN 埠號 (預設: can3)")
-    parser.add_argument("--approach-offset-deg", type=float, default=12.0, help="自動生成 Approach 上方點時的關節抬升補償度數 (預設: 12.0°)")
-    parser.add_argument("--gripper-open-deg", type=float, default=30.0, help="Release 階段張開夾爪的目標角度 (預設: 30.0°)")
+    parser.add_argument("--id", default=DEFAULT_LEADER_ID, help=f"Leader 手臂 ID (預設: {DEFAULT_LEADER_ID}，讀取校正參數)")
+    parser.add_argument("--left-port", default=DEFAULT_LEADER_LEFT_PORT, help=f"左臂 CAN 埠號 (預設: {DEFAULT_LEADER_LEFT_PORT})")
+    parser.add_argument("--right-port", default=DEFAULT_LEADER_RIGHT_PORT, help=f"右臂 CAN 埠號 (預設: {DEFAULT_LEADER_RIGHT_PORT})")
+    parser.add_argument("--approach-offset-deg", type=float, default=DEFAULT_APPROACH_OFFSET_DEG, help=f"自動生成 Approach 上方點時的關節抬升補償度數 (預設: {DEFAULT_APPROACH_OFFSET_DEG}°)")
+    parser.add_argument("--gripper-open-deg", type=float, default=DEFAULT_GRIPPER_MIN_DEG, help=f"Release 階段張開夾爪的目標角度 (預設: {DEFAULT_GRIPPER_MIN_DEG}°)")
 
     args = parser.parse_args(argv)
 

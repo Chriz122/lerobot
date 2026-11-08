@@ -145,7 +145,7 @@ python openarm_gc.py teach-slots \
   --left-port can2 \
   --right-port can3 \
   --approach-offset-deg 12.0 \
-  --gripper-open-deg 65.0
+  --gripper-open-deg 30.0
 ```
 
 **互動流程**：
@@ -209,6 +209,8 @@ python openarm_gc.py record-hybrid \
 - **水平位置（X/Y 平面）**：$\sqrt{\Delta x^2 + \Delta y^2} \le 4.0\text{ mm}$（嚴格控制在托盤格子容許裕度內）。
 - **垂直高度（Z 軸）**：$\Delta z \in [0.0, +1.0\text{ mm}]$（**向下嚴格為 0**，絕不向下多切，防止夾爪下壓撞擊托盤）。
 - **末端自旋（Yaw 偏角）**：$|\Delta \text{yaw}| \le 2.5^\circ$（Roll 與 Pitch 保持水平平行於托盤）。
+- **夾爪開度（Gripper Opening）**：以 **30.0°** 為中心進行半高斯（Half-Normal / Truncated Gaussian）擾動，**嚴格保證不低於 30.0°**，上限截斷至 **60.0°**。
+- **最後一幀夾爪保證**：Release、Retract 與軌跡最後一幀必定保持 $\ge 30.0^\circ$ 的張開狀態。
 - **通道一致性**：Approach（接近）、Place（放置）、Retract（退回）三點共享相同的水平偏移量，保證下刀與垂直抬升通道筆直，絕不刮碰托盤邊框。
 
 可透過環境變數控制：
@@ -224,5 +226,10 @@ export OPENARM_SLOT_MAX_Z_MM=1.0
 
 # 夾爪最大繞法線偏轉角度 (度，預設 2.5)
 export OPENARM_SLOT_MAX_YAW_DEG=2.5
+
+# 夾爪張開高斯擾動參數 (中心基準與下限預設 30.0°，上限 60.0°，標準差 10.0°)
+export OPENARM_SLOT_GRIPPER_MIN_DEG=30.0
+export OPENARM_SLOT_GRIPPER_MAX_DEG=60.0
+export OPENARM_SLOT_GRIPPER_SIGMA_DEG=10.0
 ```
 

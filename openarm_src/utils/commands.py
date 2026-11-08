@@ -7,7 +7,17 @@ import os
 import sys
 import time
 
-from openarm_src.utils.config import ARM_JOINTS, GRIPPER
+from openarm_src.utils.config import (
+    ARM_JOINTS,
+    DEFAULT_FOLLOWER_LEFT_PORT,
+    DEFAULT_FOLLOWER_RIGHT_PORT,
+    DEFAULT_FORCE_FEEDBACK_SCALE,
+    DEFAULT_HOME_TIME_S,
+    DEFAULT_LEADER_LEFT_PORT,
+    DEFAULT_LEADER_RIGHT_PORT,
+    DEFAULT_WEBRTC_PORT,
+    GRIPPER,
+)
 from openarm_src.utils.homing import go_home, load_waypoints
 from openarm_src.utils.patches import (
     install_patches,
@@ -27,8 +37,8 @@ def run_check(argv):
 
     p = argparse.ArgumentParser()
     p.add_argument("--id", required=True, help="與 lerobot-record 的 --teleop.id 相同 (讀同一份 calibration)")
-    p.add_argument("--left-port", default="can2")
-    p.add_argument("--right-port", default="can3")
+    p.add_argument("--left-port", default=DEFAULT_LEADER_LEFT_PORT)
+    p.add_argument("--right-port", default=DEFAULT_LEADER_RIGHT_PORT)
     p.add_argument("--save", default=None, help="按 Enter 時把目前 leader 姿態存成 json")
     p.add_argument("--waypoints", action="store_true",
                    help="每按一次 Enter 追加一個 waypoint (依序經過，最後一個 = 起始姿態)")
@@ -91,10 +101,10 @@ def run_home(argv):
 
     p = argparse.ArgumentParser()
     p.add_argument("--id", required=True, help="與 lerobot-record 的 --robot.id 相同")
-    p.add_argument("--left-port", default="can1")
-    p.add_argument("--right-port", default="can0")
+    p.add_argument("--left-port", default=DEFAULT_FOLLOWER_LEFT_PORT)
+    p.add_argument("--right-port", default=DEFAULT_FOLLOWER_RIGHT_PORT)
     p.add_argument("--home", default=os.environ.get("OPENARM_HOME"), help="reset.json 路徑")
-    p.add_argument("--time", type=float, default=float(os.environ.get("OPENARM_HOME_TIME", "8")))
+    p.add_argument("--time", type=float, default=DEFAULT_HOME_TIME_S)
     a = p.parse_args(argv)
     if not a.home:
         sys.exit("請用 --home reset.json 或 export OPENARM_HOME=reset.json")
@@ -141,8 +151,8 @@ def parse_bilateral_flag(args: list[str]) -> tuple[bool, list[str]]:
 
     if bilateral is not None:
         if bilateral:
-            cur_scale = float(os.environ.get("OPENARM_FF_SCALE", "0.05"))
-            target_scale = "0.05" if cur_scale <= 0 else str(cur_scale)
+            cur_scale = float(os.environ.get("OPENARM_FF_SCALE", str(DEFAULT_FORCE_FEEDBACK_SCALE)))
+            target_scale = str(DEFAULT_FORCE_FEEDBACK_SCALE) if cur_scale <= 0 else str(cur_scale)
             os.environ["OPENARM_FF_SCALE"] = target_scale
             logger.info("[gc] 雙向力回饋模式已啟用 (--bilateral=true)，FF_SCALE=%s", os.environ["OPENARM_FF_SCALE"])
         else:
@@ -159,7 +169,7 @@ def parse_webrtc_flag(args: list[str]) -> tuple[bool, int, list[str]]:
     """
     cleaned = []
     webrtc_enabled = None
-    webrtc_port = int(os.environ.get("OPENARM_WEBRTC_PORT", "8080"))
+    webrtc_port = int(os.environ.get("OPENARM_WEBRTC_PORT", str(DEFAULT_WEBRTC_PORT)))
     i = 0
     while i < len(args):
         arg = args[i]

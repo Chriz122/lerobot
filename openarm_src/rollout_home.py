@@ -22,10 +22,15 @@ import importlib
 from importlib.metadata import entry_points
 
 from openarm_src.utils import load_waypoints, min_jerk, patch_follower_park
+from openarm_src.utils.config import (
+    DEFAULT_HOME_TIME_S,
+    DEFAULT_RESET_FILE,
+    DEFAULT_TRAJ_FPS,
+)
 
-HOME_FILE = os.environ.get("OPENARM_HOME", "reset.json")
-SEG_TIME = float(os.environ.get("OPENARM_HOME_TIME", "4"))
-CTRL_HZ = 30
+HOME_FILE = DEFAULT_RESET_FILE
+SEG_TIME = DEFAULT_HOME_TIME_S
+CTRL_HZ = DEFAULT_TRAJ_FPS
 
 
 def _find_bi_follower_cls():

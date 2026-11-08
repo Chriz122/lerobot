@@ -6,8 +6,9 @@ from pathlib import Path
 import threading
 from typing import Any
 
+from openarm_src.utils.config import DEFAULT_TASK_NAME, DEFAULT_TRAJ_FPS
 from openarm_src.utils.homing import get_leaders
-from openarm_src.utils.slot_teacher import DEFAULT_TASKS_ROOT, get_task_slot_path
+from openarm_src.utils.slot_teacher import get_task_slot_path
 from openarm_src.utils.step_guard import StepJumpGuard
 from openarm_src.utils.trajectory_planner import generate_slot_placement_trajectory
 
@@ -34,15 +35,15 @@ def resolve_slots_config(task_or_path: str | None) -> tuple[dict[str, Any], Path
                 return json.load(f), task_p
 
     # 預設路徑
-    default_p = get_task_slot_path("teabag_4slots")
+    default_p = get_task_slot_path(DEFAULT_TASK_NAME)
     if default_p.is_file():
         with open(default_p, "r", encoding="utf-8") as f:
             return json.load(f), default_p
 
     raise FileNotFoundError(
         f"找不到托盤槽位設定檔！請先執行示教工具：\n"
-        f"  python openarm_gc.py teach-slots --task {task_or_path or 'teabag_4slots'}\n"
-        f"將會自動在 openarm_src/tasks/{task_or_path or 'teabag_4slots'}/tray_slots.json 建立配置。"
+        f"  python openarm_gc.py teach-slots --task {task_or_path or DEFAULT_TASK_NAME}\n"
+        f"將會自動在 openarm_src/tasks/{task_or_path or DEFAULT_TASK_NAME}/tray_slots.json 建立配置。"
     )
 
 
@@ -69,7 +70,7 @@ def patch_hybrid_record(module, task_or_path: str | None = None):
         bound = _call_arguments(orig_record_loop, args, kwargs)
         robot = bound.get("robot")
         teleop = bound.get("teleop")
-        fps = bound.get("fps", 30)
+        fps = bound.get("fps", DEFAULT_TRAJ_FPS)
 
         # 狀態管理
         state_lock = threading.Lock()
@@ -102,12 +103,7 @@ def patch_hybrid_record(module, task_or_path: str | None = None):
 
         perturb_enabled = os.environ.get("OPENARM_SLOT_NOISE", "1") != "0"
         perturbator = (
-            CartesianPerturbator(
-                urdf_path=os.environ.get("OPENARM_URDF", None),
-                max_xy_mm=float(os.environ.get("OPENARM_SLOT_MAX_XY_MM", "4.0")),
-                max_z_up_mm=float(os.environ.get("OPENARM_SLOT_MAX_Z_MM", "1.0")),
-                max_yaw_deg=float(os.environ.get("OPENARM_SLOT_MAX_YAW_DEG", "2.5")),
-            )
+            CartesianPerturbator(urdf_path=os.environ.get("OPENARM_URDF", None))
             if perturb_enabled
             else None
         )

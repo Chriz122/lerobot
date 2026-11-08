@@ -6,7 +6,11 @@ import os
 import time
 import numpy as np
 
-from openarm_src.utils.config import JOINT_SIGN
+from openarm_src.utils.config import (
+    DEFAULT_HOMING_RATE_HZ,
+    DEFAULT_TABLE_MARGIN_M,
+    JOINT_SIGN,
+)
 
 logger = logging.getLogger("openarm_gc.homing")
 
@@ -91,7 +95,7 @@ def go_home(robot, teleop, waypoints: list[dict[str, float]], duration: float, g
 
     # 先把整條 follower 軌跡算出來，檢查碰桌
     seg_T = duration / len(waypoints)
-    n = max(int(seg_T * 50), 1)
+    n = max(int(seg_T * DEFAULT_HOMING_RATE_HZ), 1)
     plan = []  # (follower_cmd, leader_cmd)
     f_a, l_a = dict(f_now), dict(l_now)
     for wp in waypoints:
@@ -136,7 +140,10 @@ def load_home_config():
     duration = float(os.environ.get("OPENARM_HOME_TIME", str(3 * len(waypoints) + 1)))
     guard = None
     if "OPENARM_TABLE_Z" in os.environ:
-        guard = TableGuard(os.environ["OPENARM_URDF"], float(os.environ["OPENARM_TABLE_Z"]),
-                           float(os.environ.get("OPENARM_TABLE_MARGIN", "0.05")))
+        guard = TableGuard(
+            os.environ["OPENARM_URDF"],
+            float(os.environ["OPENARM_TABLE_Z"]),
+            float(os.environ.get("OPENARM_TABLE_MARGIN", str(DEFAULT_TABLE_MARGIN_M))),
+        )
     return waypoints, duration, guard
 

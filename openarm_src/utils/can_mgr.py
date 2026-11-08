@@ -7,13 +7,20 @@ import subprocess
 import sys
 import time
 
-from openarm_src.utils.config import MOTOR_NAMES
+from openarm_src.utils.config import (
+    DEFAULT_CAN_BITRATE,
+    DEFAULT_CAN_DATA_BITRATE,
+    DEFAULT_CAN_IFACES,
+    MOTOR_NAMES,
+)
 
 logger = logging.getLogger("openarm_gc.can_mgr")
 
 
 def get_can_ifaces() -> list[str]:
-    return [x.strip() for x in os.environ.get("OPENARM_CAN_IFACES", "can0,can1,can2,can3").split(",") if x.strip()]
+    if "OPENARM_CAN_IFACES" in os.environ:
+        return [x.strip() for x in os.environ["OPENARM_CAN_IFACES"].split(",") if x.strip()]
+    return list(DEFAULT_CAN_IFACES)
 
 
 def is_iface_up(iface: str) -> bool:
@@ -44,8 +51,8 @@ def probe_bus(iface: str, target_motors: list[int] | None = None) -> tuple[str, 
         bus = can.interface.Bus(
             channel=iface,
             interface="socketcan",
-            bitrate=1000000,
-            data_bitrate=5000000,
+            bitrate=DEFAULT_CAN_BITRATE,
+            data_bitrate=DEFAULT_CAN_DATA_BITRATE,
             fd=True,
         )
     except Exception as e:

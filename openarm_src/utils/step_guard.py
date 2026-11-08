@@ -5,7 +5,11 @@ import os
 import time
 from typing import Any
 
-from openarm_src.utils.config import DEFAULT_MAX_STEP_DEG, DEFAULT_MAX_STEP_GRIPPER_DEG
+from openarm_src.utils.config import (
+    DEFAULT_MAX_STEP_DEG,
+    DEFAULT_MAX_STEP_GRIPPER_DEG,
+    STEP_GUARD_WARN_THROTTLE_S,
+)
 
 logger = logging.getLogger("openarm_gc.step_guard")
 
@@ -87,8 +91,8 @@ class StepJumpGuard:
                     clamped_v = prev_v + (limit if delta > 0 else -limit)
                     clamped_action[k] = clamped_v
 
-                    # 節流告警記錄 (每個關節最多每 2 秒印一次，避免洗版)
-                    if now - self._last_warn_time.get(k, 0) > 2.0:
+                    # 節流告警記錄 (每個關節最多每 STEP_GUARD_WARN_THROTTLE_S 秒印一次，避免洗版)
+                    if now - self._last_warn_time.get(k, 0) > STEP_GUARD_WARN_THROTTLE_S:
                         logger.warning(
                             f"[step_guard] [警告] 抑制關節步長跳變 ({k}): 目標 delta={delta:+.1f}° > 限制 {limit:.1f}°，"
                             f"已平滑限制為 {clamped_v:.1f}°"

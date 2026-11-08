@@ -58,5 +58,70 @@ DEFAULT_FORCE_FEEDBACK_ALPHA = 0.6
 DEFAULT_FORCE_FEEDBACK_DEADBAND = 0.02
 
 # 關節步長防跳保護參數 / Step Jump Guard tunables
-DEFAULT_MAX_STEP_DEG = 4.0          # 每拍最大容許關節移動度數 (30 FPS 下相當於 120 deg/s)
-DEFAULT_MAX_STEP_GRIPPER_DEG = 15.0 # 每拍夾爪最大容許移動度數
+DEFAULT_MAX_STEP_DEG = float(os.environ.get("OPENARM_MAX_STEP_DEG", "4.0"))          # 每拍最大容許關節移動度數 (30 FPS 下相當於 120 deg/s)
+DEFAULT_MAX_STEP_GRIPPER_DEG = float(os.environ.get("OPENARM_MAX_STEP_GRIPPER", "15.0")) # 每拍夾爪最大容許移動度數
+STEP_GUARD_WARN_THROTTLE_S = float(os.environ.get("OPENARM_WARN_THROTTLE_S", "2.0"))      # 告警節流間隔 (秒)
+
+# 托盤槽位放置與夾爪擾動參數 / Slot placement & perturbation tunables
+DEFAULT_SLOT_MAX_XY_MM = float(os.environ.get("OPENARM_SLOT_MAX_XY_MM", "4.0"))
+DEFAULT_SLOT_MAX_Z_MM = float(os.environ.get("OPENARM_SLOT_MAX_Z_MM", "1.0"))
+DEFAULT_SLOT_MAX_YAW_DEG = float(os.environ.get("OPENARM_SLOT_MAX_YAW_DEG", "2.5"))
+
+DEFAULT_GRIPPER_MIN_DEG = float(os.environ.get("OPENARM_SLOT_GRIPPER_MIN_DEG", "30.0"))
+DEFAULT_GRIPPER_MAX_DEG = float(os.environ.get("OPENARM_SLOT_GRIPPER_MAX_DEG", "60.0"))
+DEFAULT_GRIPPER_SIGMA_DEG = float(os.environ.get("OPENARM_SLOT_GRIPPER_SIGMA_DEG", "10.0"))
+
+# 任務與槽位示教參數 / Task & Slot Teaching tunables
+DEFAULT_TASK_NAME = os.environ.get("OPENARM_TASK_NAME", "teabag_4slots")
+DEFAULT_SLOTS_COUNT = int(os.environ.get("OPENARM_SLOTS_COUNT", "4"))
+DEFAULT_APPROACH_OFFSET_DEG = float(os.environ.get("OPENARM_APPROACH_OFFSET_DEG", "12.0"))
+DEFAULT_SLOT_FILENAME = "tray_slots.json"
+
+# 軌跡生成與時間參數 / Trajectory Planning & Timing tunables
+DEFAULT_TRAJ_FPS = int(os.environ.get("OPENARM_TRAJ_FPS", "30"))
+DEFAULT_TRANSIT_TIME_S = float(os.environ.get("OPENARM_TRANSIT_TIME_S", "1.2"))
+DEFAULT_PLACE_TIME_S = float(os.environ.get("OPENARM_PLACE_TIME_S", "0.8"))
+DEFAULT_RELEASE_TIME_S = float(os.environ.get("OPENARM_RELEASE_TIME_S", "0.4"))
+DEFAULT_RETRACT_TIME_S = float(os.environ.get("OPENARM_RETRACT_TIME_S", "0.8"))
+
+# 硬體連線與 CAN 埠號參數 / Hardware Connection & CAN ports
+DEFAULT_LEADER_ID = os.environ.get("OPENARM_LEADER_ID", "bi_leader")
+DEFAULT_FOLLOWER_ID = os.environ.get("OPENARM_FOLLOWER_ID", "bi_follower")
+DEFAULT_LEADER_LEFT_PORT = os.environ.get("OPENARM_LEADER_LEFT_PORT", "can2")
+DEFAULT_LEADER_RIGHT_PORT = os.environ.get("OPENARM_LEADER_RIGHT_PORT", "can3")
+DEFAULT_FOLLOWER_LEFT_PORT = os.environ.get("OPENARM_FOLLOWER_LEFT_PORT", "can1")
+DEFAULT_FOLLOWER_RIGHT_PORT = os.environ.get("OPENARM_FOLLOWER_RIGHT_PORT", "can0")
+
+DEFAULT_CAN_IFACES = [x.strip() for x in os.environ.get("OPENARM_CAN_IFACES", "can0,can1,can2,can3").split(",") if x.strip()]
+DEFAULT_CAN_BITRATE = int(os.environ.get("OPENARM_CAN_BITRATE", "1000000"))
+DEFAULT_CAN_DATA_BITRATE = int(os.environ.get("OPENARM_CAN_DATA_BITRATE", "5000000"))
+
+# 運動學模型與 URDF 參數 / Kinematics & URDF tunables
+DEFAULT_URDF_PATH = os.environ.get("OPENARM_URDF", r"C:\Users\chsh1\Desktop\v1.urdf")
+PINOCCHIO_IK_DAMPING = float(os.environ.get("OPENARM_IK_DAMPING", "1e-4"))
+OPENARM_UPPER_ARM_LEN_M = float(os.environ.get("OPENARM_UPPER_ARM_LEN_M", "0.35"))
+OPENARM_FOREARM_LEN_M = float(os.environ.get("OPENARM_FOREARM_LEN_M", "0.33"))
+OPENARM_GRIPPER_LEN_M = float(os.environ.get("OPENARM_GRIPPER_LEN_M", "0.15"))
+
+# 安全與 Homing 參數 / Safety & Homing tunables
+DEFAULT_TABLE_MARGIN_M = float(os.environ.get("OPENARM_TABLE_MARGIN", "0.05"))
+DEFAULT_HOME_TIME_S = float(os.environ.get("OPENARM_HOME_TIME", "8.0"))
+DEFAULT_PARK_TIME_S = float(os.environ.get("OPENARM_PARK_TIME", "3.0"))
+DEFAULT_HOMING_RATE_HZ = float(os.environ.get("OPENARM_HOMING_RATE_HZ", "50.0"))
+DEFAULT_HOME_AT = os.environ.get("OPENARM_HOME_AT", "record")
+DEFAULT_RESET_FILE = os.environ.get("OPENARM_HOME", "reset.json")
+
+# 評估與實機測試參數 / Evaluation tunables
+DEFAULT_EVAL_TRIALS = int(os.environ.get("OPENARM_EVAL_TRIALS", "10"))
+DEFAULT_EVAL_DURATION_S = float(os.environ.get("OPENARM_EVAL_DURATION_S", "45.0"))
+DEFAULT_EVAL_LOG_FILE = os.environ.get("OPENARM_EVAL_LOG_FILE", "eval_results.csv")
+
+# WebRTC 實時串流
+DEFAULT_WEBRTC_PORT = int(os.environ.get("OPENARM_WEBRTC_PORT", "8080"))
+
+# 重力補償與力回饋通用擴充
+DEFAULT_GC_SCALE = float(os.environ.get("OPENARM_GC_SCALE", "1.0"))
+DEFAULT_KD_SCALE = float(os.environ.get("OPENARM_KD_SCALE", "1.0"))
+DEFAULT_FRICTION_SCALE = float(os.environ.get("OPENARM_FRICTION_SCALE", "0.0"))
+DEFAULT_FF_SIGN = float(os.environ.get("OPENARM_FF_SIGN", "-1.0"))
+

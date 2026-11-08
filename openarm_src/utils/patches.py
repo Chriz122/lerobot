@@ -8,8 +8,12 @@ import time
 
 from openarm_src.utils.config import (
     ARM_JOINTS,
+    DEFAULT_FF_SIGN,
     DEFAULT_FORCE_FEEDBACK_LIMIT,
     DEFAULT_FORCE_FEEDBACK_SCALE,
+    DEFAULT_HOME_AT,
+    DEFAULT_PARK_TIME_S,
+    DEFAULT_WEBRTC_PORT,
 )
 from openarm_src.utils.homing import (
     get_leaders,
@@ -64,7 +68,7 @@ def bind_force_feedback(robot, teleop) -> None:
     logger.info(
         "[gc] 力回饋已開啟 (比例=%.3g, 正負號=%+.0f, 上限=%.3g Nm)",
         ff_scale,
-        float(os.environ.get("OPENARM_FF_SIGN", "-1.0")),
+        float(os.environ.get("OPENARM_FF_SIGN", str(DEFAULT_FF_SIGN))),
         abs(float(os.environ.get("OPENARM_FF_LIMIT", DEFAULT_FORCE_FEEDBACK_LIMIT))),
     )
 
@@ -222,7 +226,7 @@ def _park_path(current: dict[str, float]) -> list[dict[str, float]]:
 
 def follower_park(arm, prefix: str = "", duration_per_seg: float | None = None):
     """單支 OpenArmFollower 慢慢回到下垂姿態 (MIT 位置控制)，之後才讓 LeRobot 關力矩。"""
-    T = duration_per_seg or float(os.environ.get("OPENARM_PARK_TIME", "3"))
+    T = duration_per_seg or float(os.environ.get("OPENARM_PARK_TIME", str(DEFAULT_PARK_TIME_S)))
     present = arm.bus.sync_read("Present_Position")
     cur = {f"{prefix}{m}.pos": float(v) for m, v in present.items()}
     for seg in _park_path(cur):
@@ -248,7 +252,7 @@ def bimanual_disconnect(self):
             raise _SkipPark()
 
         logger.info(f"[gc] 正在將雙{label}回位至下垂姿態...")
-        T = float(os.environ.get("OPENARM_PARK_TIME", "3"))
+        T = float(os.environ.get("OPENARM_PARK_TIME", str(DEFAULT_PARK_TIME_S)))
         cur = {}
 
         if is_leader:
@@ -404,7 +408,7 @@ def install_patches():
                 # 先慢慢垂回零點 (重力中性姿態)，再關力矩，避免手臂直接摔下
                 try:
                     logger.info(f"[gc] {self}: 關閉力矩前先回到下垂姿態")
-                    T = float(os.environ.get("OPENARM_PARK_TIME", "3"))
+                    T = float(os.environ.get("OPENARM_PARK_TIME", str(DEFAULT_PARK_TIME_S)))
                     gc.move_to({m: 0.0 for m in ARM_JOINTS}, T)
                     time.sleep(0.3)
                 except Exception as e:  # noqa: BLE001
@@ -446,13 +450,13 @@ def install_patches():
 
 def patch_record_loop(module):
     waypoints, duration, guard = load_home_config()
-    when = os.environ.get("OPENARM_HOME_AT", "record")  # "record" 或 "reset"
+    when = os.environ.get("OPENARM_HOME_AT", DEFAULT_HOME_AT)  # "record" 或 "reset"
     profiler = LoopProfiler() if os.environ.get("OPENARM_PROFILE", "1") != "0" else None
 
     streamer = None
     if os.environ.get("OPENARM_WEBRTC", "0") == "1":
         from openarm_src.utils.webrtc_streamer import get_webrtc_streamer
-        port = int(os.environ.get("OPENARM_WEBRTC_PORT", "8080"))
+        port = int(os.environ.get("OPENARM_WEBRTC_PORT", str(DEFAULT_WEBRTC_PORT)))
         streamer = get_webrtc_streamer(port=port)
         streamer.start()
 
@@ -485,7 +489,7 @@ def patch_teleop_loop(module):
     streamer = None
     if os.environ.get("OPENARM_WEBRTC", "0") == "1":
         from openarm_src.utils.webrtc_streamer import get_webrtc_streamer
-        port = int(os.environ.get("OPENARM_WEBRTC_PORT", "8080"))
+        port = int(os.environ.get("OPENARM_WEBRTC_PORT", str(DEFAULT_WEBRTC_PORT)))
         streamer = get_webrtc_streamer(port=port)
         streamer.start()
 
