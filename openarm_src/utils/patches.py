@@ -12,6 +12,7 @@ from openarm_src.utils.config import (
     DEFAULT_FORCE_FEEDBACK_LIMIT,
     DEFAULT_FORCE_FEEDBACK_SCALE,
     DEFAULT_HOME_AT,
+    DEFAULT_PARK_ENABLE,
     DEFAULT_PARK_TIME_S,
     DEFAULT_WEBRTC_PORT,
 )
@@ -242,7 +243,7 @@ def follower_park(arm, prefix: str = "", duration_per_seg: float | None = None):
 
 def bimanual_disconnect(self):
     """雙手設備 (BiOpenArmLeader / BiOpenArmFollower) 同步回位至下垂姿態後，安全中斷連線。"""
-    park_on = os.environ.get("OPENARM_PARK", "1") != "0"
+    park_on = DEFAULT_PARK_ENABLE
     arms = [("left_", self.left_arm), ("right_", self.right_arm)]
     is_leader = hasattr(self.left_arm, "_gc") or not hasattr(self, "send_action")
     label = "主臂" if is_leader else "從臂"
@@ -317,7 +318,7 @@ def patch_follower_park():
     if _FOLLOWER_PATCHED:
         return
     _FOLLOWER_PATCHED = True
-    park_on = os.environ.get("OPENARM_PARK", "1") != "0"
+    park_on = DEFAULT_PARK_ENABLE
     from lerobot.robots.bi_openarm_follower import BiOpenArmFollower
     from lerobot.robots.openarm_follower import OpenArmFollower
 
@@ -403,7 +404,7 @@ def install_patches():
     def disconnect(self):
         gc = getattr(self, "_gc", None)
         if gc is not None:
-            park_on = os.environ.get("OPENARM_PARK", "1") != "0"
+            park_on = DEFAULT_PARK_ENABLE
             if gc.error is None and park_on and not getattr(self, "_parked", False):
                 # 先慢慢垂回零點 (重力中性姿態)，再關力矩，避免手臂直接摔下
                 try:

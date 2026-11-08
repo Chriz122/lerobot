@@ -11,11 +11,10 @@ rollout_home.py — 在 lerobot-rollout 開始推論前，先把 OpenArm followe
     python rollout_home.py <與 lerobot-rollout 完全相同的參數>
 
 環境變數：
-    OPENARM_HOME       起始姿態檔，預設 reset.json
-    OPENARM_HOME_TIME  每一段 waypoint 的移動秒數，預設 4
-    OPENARM_PARK       1（預設）= 結束時回下垂再關力矩
+    DEFAULT_RESET_FILE      起始姿態檔，預設 reset.json
+    DEFAULT_HOME_TIME_S     每一段 waypoint 的移動秒數，預設 4
+    DEFAULT_PARK_ENABLE     1（預設）= 結束時回下垂再關力矩
 """
-import os
 import sys
 import time
 import importlib
@@ -27,10 +26,6 @@ from openarm_src.utils.config import (
     DEFAULT_RESET_FILE,
     DEFAULT_TRAJ_FPS,
 )
-
-HOME_FILE = DEFAULT_RESET_FILE
-SEG_TIME = DEFAULT_HOME_TIME_S
-CTRL_HZ = DEFAULT_TRAJ_FPS
 
 
 def _find_bi_follower_cls():
@@ -48,11 +43,11 @@ def _find_bi_follower_cls():
 def _move_to(robot, goal: dict[str, float], duration: float):
     obs = robot.get_observation()
     start = {k: float(obs[k]) for k in goal}
-    n = max(1, int(duration * CTRL_HZ))
+    n = max(1, int(duration * DEFAULT_TRAJ_FPS))
     for i in range(1, n + 1):
         s = min_jerk(i / n)
         robot.send_action({k: start[k] + (goal[k] - start[k]) * s for k in goal})
-        time.sleep(1.0 / CTRL_HZ)
+        time.sleep(1.0 / DEFAULT_TRAJ_FPS)
 
 
 def install_patches():
@@ -63,11 +58,11 @@ def install_patches():
 
     def connect(self, *args, **kwargs):
         orig_connect(self, *args, **kwargs)
-        waypoints = load_waypoints(HOME_FILE)
-        input(f"\n[注意] follower 將移到起始姿態（{HOME_FILE}，{len(waypoints)} 段）。淨空桌面、手放急停旁，按 Enter 開始移動 ...")
+        waypoints = load_waypoints(DEFAULT_RESET_FILE)
+        input(f"\n[注意] follower 將移到起始姿態（{DEFAULT_RESET_FILE}，{len(waypoints)} 段）。淨空桌面、手放急停旁，按 Enter 開始移動 ...")
         for i, wp in enumerate(waypoints, 1):
             print(f"[home] 移動到 waypoint {i}/{len(waypoints)} ...")
-            _move_to(self, wp, SEG_TIME)
+            _move_to(self, wp, DEFAULT_HOME_TIME_S)
         time.sleep(0.5)
         input("\n[完成] 已在起始姿態。擺好瓶子與托盤後按 Enter 開始推論 ...")
         print("[home] 交給模型控制\n")

@@ -1,11 +1,10 @@
 import math
-from pathlib import Path
+
 from openarm_src.utils.slot_teacher import get_task_slot_path
 from openarm_src.utils.trajectory_planner import (
     interpolate_poses,
     generate_slot_placement_trajectory,
 )
-from openarm_src.utils.hybrid_recorder import resolve_slots_config
 
 
 def test_interpolate_poses():

@@ -1,9 +1,5 @@
 import math
-from openarm_src.utils.config import (
-    DEFAULT_GRIPPER_MAX_DEG,
-    DEFAULT_GRIPPER_MIN_DEG,
-    DEFAULT_GRIPPER_SIGMA_DEG,
-)
+
 from openarm_src.utils.kinematics import CartesianPerturbator
 from openarm_src.utils.trajectory_planner import generate_slot_placement_trajectory
 

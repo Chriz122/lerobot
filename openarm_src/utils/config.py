@@ -97,7 +97,7 @@ DEFAULT_CAN_BITRATE = int(os.environ.get("OPENARM_CAN_BITRATE", "1000000"))
 DEFAULT_CAN_DATA_BITRATE = int(os.environ.get("OPENARM_CAN_DATA_BITRATE", "5000000"))
 
 # 運動學模型與 URDF 參數 / Kinematics & URDF tunables
-DEFAULT_URDF_PATH = os.environ.get("OPENARM_URDF", r"C:\Users\chsh1\Desktop\v1.urdf")
+DEFAULT_URDF_PATH = os.environ.get("OPENARM_URDF", None)
 PINOCCHIO_IK_DAMPING = float(os.environ.get("OPENARM_IK_DAMPING", "1e-4"))
 OPENARM_UPPER_ARM_LEN_M = float(os.environ.get("OPENARM_UPPER_ARM_LEN_M", "0.35"))
 OPENARM_FOREARM_LEN_M = float(os.environ.get("OPENARM_FOREARM_LEN_M", "0.33"))
@@ -105,7 +105,8 @@ OPENARM_GRIPPER_LEN_M = float(os.environ.get("OPENARM_GRIPPER_LEN_M", "0.15"))
 
 # 安全與 Homing 參數 / Safety & Homing tunables
 DEFAULT_TABLE_MARGIN_M = float(os.environ.get("OPENARM_TABLE_MARGIN", "0.05"))
-DEFAULT_HOME_TIME_S = float(os.environ.get("OPENARM_HOME_TIME", "8.0"))
+DEFAULT_HOME_TIME_S = float(os.environ.get("OPENARM_HOME_TIME", "4.0"))
+DEFAULT_PARK_ENABLE = os.environ.get("OPENARM_PARK", "1") != "0"
 DEFAULT_PARK_TIME_S = float(os.environ.get("OPENARM_PARK_TIME", "3.0"))
 DEFAULT_HOMING_RATE_HZ = float(os.environ.get("OPENARM_HOMING_RATE_HZ", "50.0"))
 DEFAULT_HOME_AT = os.environ.get("OPENARM_HOME_AT", "record")
