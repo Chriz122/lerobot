@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""robot_client + 歸位：先註冊 OpenArm、移到 reset.json 起始姿態，按 Enter 才開始推論；結束回下垂"""
+import runpy
+import sys
+import rollout_home                      # 先載入 openarm_src（避免 segfault）
+
+rollout_home.install_patches()           # 會 import bi_openarm_follower → 註冊到 robot.type
+sys.argv = ["robot_client"] + sys.argv[1:]
+runpy.run_module("lerobot.async_inference.robot_client", run_name="__main__")

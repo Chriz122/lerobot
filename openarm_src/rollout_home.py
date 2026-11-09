@@ -1,81 +1,55 @@
 #!/usr/bin/env python3
-"""
-rollout_home.py — 在 lerobot-rollout 開始推論前，先把 OpenArm follower 平滑移到起始姿態。
+"""rollout_local.py — 在本機 GPU（1080 Ti）用 lerobot-rollout 推論，條件與 client_home.py 相同：
+    歸位（reset.json）→ Enter 開始推論 → 結束回下垂 → 夾爪濾波 → 印出每次推論時間
 
-不修改 LeRobot 原始碼，做法與 openarm_gc.py 相同（monkey-patch）：
-  - BiOpenArmFollower.connect：連線後依 reset.json 的 waypoints 用 min-jerk 軌跡移到起始姿態，
-    並在推論開始前等你按 Enter（讓你擺好瓶子、托盤）
-  - follower disconnect：沿用 openarm_gc 的 park，結束時先慢慢回下垂再關力矩（不會直接掉下來）
+用來跟 5090 非同步推論（client_home.py）做公平比較：同一個模型、同樣的安全限制與夾爪濾波，
+只差在推論在哪台 GPU 上跑。
 
-用法（放在 ~/lerobot，與 openarm_gc.py、reset.json 同一個資料夾）：
-    python rollout_home.py <與 lerobot-rollout 完全相同的參數>
+用法（在 ~/lerobot/openarm_src）：
+    export PYTHONPATH=$HOME/lerobot
+    export OPENARM_HOME=$HOME/lerobot/openarm_src/reset.json
+    python rollout_local.py --strategy.type=base --policy.path=... --duration=60 ...（與 lerobot-rollout 相同的參數）
 
 環境變數：
-    OPENARM_HOME       起始姿態檔，預設 reset.json
-    OPENARM_HOME_TIME  每一段 waypoint 的移動秒數，預設 4
-    OPENARM_PARK       1（預設）= 結束時回下垂再關力矩
+    OPENARM_GRIPPER_DEADBAND / OPENARM_GRIPPER_SMOOTH  同 client_home.py
+    OPENARM_TIMING  1（預設）= 印出每次 SmolVLA 推論時間；0 = 不印
 """
 import os
 import sys
 import time
-import importlib
 from importlib.metadata import entry_points
 
-from openarm_src.utils import load_waypoints, min_jerk, patch_follower_park
+import client_home  # noqa: F401  載入即套用：歸位、結束回下垂、夾爪濾波（不會啟動 robot_client）
 
-HOME_FILE = os.environ.get("OPENARM_HOME", "reset.json")
-SEG_TIME = float(os.environ.get("OPENARM_HOME_TIME", "4"))
-CTRL_HZ = 30
+if os.environ.get("OPENARM_TIMING", "1") == "1":
+    try:
+        import torch
+        from lerobot.policies.smolvla import modeling_smolvla as m
 
+        _orig = m.VLAFlowMatching.sample_actions
+        _n = [0]
 
-def _find_bi_follower_cls():
-    for mod in ("lerobot.robots.bi_openarm_follower",
-                "lerobot.robots.bi_openarm_follower.bi_openarm_follower"):
-        try:
-            m = importlib.import_module(mod)
-            if hasattr(m, "BiOpenArmFollower"):
-                return m.BiOpenArmFollower
-        except ImportError:
-            pass
-    raise ImportError("找不到 BiOpenArmFollower 類別")
+        def _timed(self, *a, **k):
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            t = time.perf_counter()
+            out = _orig(self, *a, **k)
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            ms = (time.perf_counter() - t) * 1000
+            _n[0] += 1
+            print(f"[timing] #{_n[0]:3d}  推論 {ms:6.0f} ms = {ms / 33.3:4.1f} 步 (30Hz)", flush=True)
+            return out
 
-
-def _move_to(robot, goal: dict[str, float], duration: float):
-    obs = robot.get_observation()
-    start = {k: float(obs[k]) for k in goal}
-    n = max(1, int(duration * CTRL_HZ))
-    for i in range(1, n + 1):
-        s = min_jerk(i / n)
-        robot.send_action({k: start[k] + (goal[k] - start[k]) * s for k in goal})
-        time.sleep(1.0 / CTRL_HZ)
-
-
-def install_patches():
-    patch_follower_park()  # 結束時先回下垂再關力矩
-
-    cls = _find_bi_follower_cls()
-    orig_connect = cls.connect
-
-    def connect(self, *args, **kwargs):
-        orig_connect(self, *args, **kwargs)
-        waypoints = load_waypoints(HOME_FILE)
-        input(f"\n⚠  follower 將移到起始姿態（{HOME_FILE}，{len(waypoints)} 段）。淨空桌面、手放急停旁，按 Enter 開始移動 ...")
-        for i, wp in enumerate(waypoints, 1):
-            print(f"[home] 移動到 waypoint {i}/{len(waypoints)} ...")
-            _move_to(self, wp, SEG_TIME)
-        time.sleep(0.5)
-        input("\n✔ 已在起始姿態。擺好瓶子與托盤後按 Enter 開始推論 ...")
-        print("[home] 交給模型控制\n")
-
-    cls.connect = connect
+        m.VLAFlowMatching.sample_actions = _timed
+    except Exception as e:  # 不是 SmolVLA 或版本不同就略過計時
+        print(f"[timing] 略過計時：{e}")
 
 
 def main():
-    install_patches()
     ep = next(e for e in entry_points(group="console_scripts") if e.name == "lerobot-rollout")
-    rollout_main = ep.load()
     sys.argv = ["lerobot-rollout"] + sys.argv[1:]
-    sys.exit(rollout_main())
+    sys.exit(ep.load()())
 
 
 if __name__ == "__main__":
