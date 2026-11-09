@@ -56,12 +56,17 @@ class StepJumpGuard:
 
         synced_count = 0
         for k, v in obs.items():
-            if isinstance(v, (int, float)) or (hasattr(v, "item") and hasattr(v, "dtype")):
-                val = float(v.item() if hasattr(v, "item") else v)
-                # 匹配關節角度鍵值 (例如 left_joint_1.pos 或 joint_1.pos 或 left_gripper.pos)
-                if k.endswith(".pos") or "joint_" in k or "gripper" in k:
-                    self.last_action[k] = val
-                    synced_count += 1
+            # 先過濾鍵名，避免對相機影像陣列調用 .item()
+            if not (k.endswith(".pos") or "joint_" in k or "gripper" in k):
+                continue
+            if isinstance(v, (int, float)):
+                val = float(v)
+            elif hasattr(v, "item") and getattr(v, "size", getattr(v, "numel", lambda: 1)()) == 1:
+                val = float(v.item())
+            else:
+                continue
+            self.last_action[k] = val
+            synced_count += 1
 
         if synced_count > 0:
             logger.info(f"[step_guard] 已同步真實姿態基準 ({synced_count} 個關節/夾爪)")
@@ -75,8 +80,10 @@ class StepJumpGuard:
         now = time.monotonic()
 
         for k, v in action.items():
-            if isinstance(v, (int, float)) or (hasattr(v, "item") and hasattr(v, "dtype")):
-                v_float = float(v.item() if hasattr(v, "item") else v)
+            if isinstance(v, (int, float)):
+                v_float = float(v)
+            elif hasattr(v, "item") and getattr(v, "size", getattr(v, "numel", lambda: 1)()) == 1:
+                v_float = float(v.item())
             else:
                 continue
 

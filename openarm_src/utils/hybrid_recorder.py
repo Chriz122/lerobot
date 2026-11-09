@@ -71,7 +71,7 @@ def patch_hybrid_record(module, task_or_path: str | None = None):
 
     def hybrid_record_loop(*args, **kwargs):
         # 取得傳入參數
-        from lerobot.scripts.lerobot_record import _call_arguments
+        from openarm_src.utils.patches import _call_arguments
         bound = _call_arguments(orig_record_loop, args, kwargs)
         robot = bound.get("robot")
         teleop = bound.get("teleop")
