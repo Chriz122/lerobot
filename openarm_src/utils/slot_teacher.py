@@ -15,6 +15,8 @@ from openarm_src.utils.config import (
     DEFAULT_FOLLOWER_LEFT_PORT,
     DEFAULT_FOLLOWER_RIGHT_PORT,
     DEFAULT_GRIPPER_MIN_DEG,
+    DEFAULT_HOME_PATH,
+    DEFAULT_HOME_TIME_S,
     DEFAULT_LEADER_ID,
     DEFAULT_LEADER_LEFT_PORT,
     DEFAULT_LEADER_RIGHT_PORT,
@@ -24,6 +26,7 @@ from openarm_src.utils.config import (
     GRIPPER,
 )
 from openarm_src.utils.patches import install_patches
+from openarm_src.utils.homing import go_home, load_waypoints
 
 logger = logging.getLogger("openarm_gc.slot_teacher")
 
@@ -121,6 +124,19 @@ def run_teach_slots(argv: list[str]) -> None:
             follower = BiOpenArmFollower(follower_cfg)
             follower.connect()
 
+            print(f"[OK] Follower 已連線，先移動至 {DEFAULT_HOME_PATH} 的錄製起始姿態...")
+            home_path = Path(DEFAULT_HOME_PATH)
+            if not home_path.is_file():
+                raise FileNotFoundError(
+                    f"找不到錄製起始姿態檔案: {home_path}，請先建立 openarm_src/reset.json。"
+                )
+            go_home(follower, teleop, load_waypoints(str(home_path)), DEFAULT_HOME_TIME_S)
+            print("[OK] 已到達 reset.json 起始姿態。\n")
+        else:
+            print(f"請將雙臂移到 {DEFAULT_HOME_PATH} 的錄製起始姿態，按 [Enter] 後開始錄製...")
+            input()
+
+        if follower is not None:
             def follow_loop() -> None:
                 try:
                     while not follow_stop.wait(1.0 / args.follower_fps):
@@ -134,9 +150,7 @@ def run_teach_slots(argv: list[str]) -> None:
 
             follow_thread = threading.Thread(target=follow_loop, name="slot-teach-follower", daemon=True)
             follow_thread.start()
-            print("[OK] Follower 已連線，主臂動作會即時同步到從臂。\n")
-        else:
-            print()
+            print("[OK] 已在 reset.json 起始姿態，開始錄製槽位。\n")
 
         slots_data: dict[str, dict] = {}
 

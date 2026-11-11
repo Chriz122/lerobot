@@ -40,7 +40,7 @@
 | 環境變數 | 型別 | 預設值 | 說明 |
 | :--- | :---: | :---: | :--- |
 | `OPENARM_URDF` | 字串 | `None` | **(必填)** 雙臂 URDF 模型絕對路徑 (關節名 `openarm_{left,right}_joint1..7`) |
-| `OPENARM_HOME` | 字串 | `"reset.json"` | 起始姿態 waypoint 檔案路徑；若設為空則略過自動 Homing |
+| `OPENARM_HOME` | 字串 | `openarm_src/reset.json` | 起始姿態 waypoint 檔案路徑；若設為空則略過自動 Homing |
 | `OPENARM_HOME_TIME` | 浮點數 | `4.0` | 移動至起始姿態的總時間 (秒) |
 | `OPENARM_HOME_AT` | 字串 | `"record"` | 觸發 Homing 時機：`"record"` (每集開錄前) 或 `"reset"` (每集結束重置時) |
 | `OPENARM_TABLE_Z` | 浮點數 | `None` | (選填) 桌面在 URDF 世界座標系之高度 (m)，設定後會自動啟用桌面防撞檢查 |
@@ -119,7 +119,7 @@
 
 ```bash
 export OPENARM_URDF=~/ros2_ws/src/openarm_description/assets/robot/openarm_v1.0/urdf/example/v1.urdf
-export OPENARM_HOME=home.json
+export OPENARM_HOME=~/lerobot/openarm_src/reset.json
 ```
 
 ---
@@ -191,7 +191,7 @@ python openarm_gc.py teleoperate \
 參數與 `lerobot-record` 完全相容。在每個 Episode 開錄前，自動控制 Leader + Follower 同步移至 `OPENARM_HOME` 姿態，到位後釋放 Leader 供手動示範：
 
 ```bash
-export OPENARM_HOME=home.json
+export OPENARM_HOME=~/lerobot/openarm_src/reset.json
 
 python openarm_gc.py record \
   --robot.type=bi_openarm_follower \
@@ -257,8 +257,12 @@ python openarm_gc.py rollout \
 
 透過 Leader 重力補償直接拖曳手臂至各槽位貼盤位置，按下 `Enter` 自動計算 Approach、Place、Release、Retract 點並存成任務設定檔：
 
+啟動後會先讀取 `openarm_src/reset.json`，並在錄製槽位前將 Follower 與
+Leader 移到該起始姿態；未啟用 Follower 時，程式會要求操作員手動將 Leader
+移到同一位置。`record` 每集開始 homing 時也會讀取同一份檔案。
+
 ```bash
-# 示教 teabag_4slots 任務的 4 個槽位 (自動存至 openarm_src/tasks/teabag_4slots/tray_slots.json)
+# 示教 teabag_4slots 任務的 4 個槽位，並更新 openarm_src/reset.json
 python openarm_gc.py teach-slots \
   --task teabag_4slots \
   --slots 4 \

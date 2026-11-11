@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_RESET_PATH = str(PROJECT_ROOT / "openarm_src" / "reset.json")
 
 # ----------------------------------------------------------------------------
 # 可調參數 / Tunables (index 0..6 = joint_1..joint_7)
@@ -115,8 +119,8 @@ DEFAULT_PARK_ENABLE = os.environ.get("OPENARM_PARK", "1") != "0"
 DEFAULT_PARK_TIME_S = float(os.environ.get("OPENARM_PARK_TIME", "3.0"))
 DEFAULT_HOMING_RATE_HZ = float(os.environ.get("OPENARM_HOMING_RATE_HZ", "50.0"))
 DEFAULT_HOME_AT = os.environ.get("OPENARM_HOME_AT", "record")
-DEFAULT_RESET_FILE = os.environ.get("OPENARM_HOME", "reset.json")
-DEFAULT_HOME_PATH = os.environ.get("OPENARM_HOME", None)
+DEFAULT_RESET_FILE = os.environ.get("OPENARM_HOME", DEFAULT_RESET_PATH)
+DEFAULT_HOME_PATH = os.environ.get("OPENARM_HOME", DEFAULT_RESET_PATH)
 
 # 評估與實機測試參數 / Evaluation tunables
 DEFAULT_EVAL_TRIALS = int(os.environ.get("OPENARM_EVAL_TRIALS", "10"))
@@ -140,4 +144,3 @@ DEFAULT_LEADER_SIDE = os.environ.get("OPENARM_LEADER_SIDE", None)
 DEFAULT_LEADER_TRACK_ENABLE = os.environ.get("OPENARM_LEADER_TRACK", "1") != "0"
 DEFAULT_PROFILE_ENABLE = os.environ.get("OPENARM_PROFILE", "1") != "0"
 DEFAULT_FF_SIGN = float(os.environ.get("OPENARM_FF_SIGN", "-1.0"))
-
