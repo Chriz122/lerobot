@@ -35,19 +35,24 @@ def run_check(argv):
     from lerobot.teleoperators.openarm_leader.config_openarm_leader import OpenArmLeaderConfigBase
 
     p = argparse.ArgumentParser()
-    p.add_argument("--id", required=True, help="與 lerobot-record 的 --teleop.id 相同 (讀同一份 calibration)")
-    p.add_argument("--left-port", default=DEFAULT_LEADER_LEFT_PORT)
-    p.add_argument("--right-port", default=DEFAULT_LEADER_RIGHT_PORT)
+    p.add_argument("--teleop.type", dest="teleop_type", default="bi_openarm_leader")
+    p.add_argument("--teleop.id", dest="teleop_id", default=None, help="讀取此 Leader calibration")
+    p.add_argument("--teleop.left_arm_config.port", dest="teleop_left_port", default=DEFAULT_LEADER_LEFT_PORT)
+    p.add_argument("--teleop.right_arm_config.port", dest="teleop_right_port", default=DEFAULT_LEADER_RIGHT_PORT)
     p.add_argument("--save", default=None, help="按 Enter 時把目前 leader 姿態存成 json")
     p.add_argument("--waypoints", action="store_true",
                    help="每按一次 Enter 追加一個 waypoint (依序經過，最後一個 = 起始姿態)")
     a = p.parse_args(argv)
+    if a.teleop_type != "bi_openarm_leader":
+        p.error("--teleop.type 必須是 bi_openarm_leader")
+    if not a.teleop_id:
+        p.error("--teleop.id 為必要參數")
 
     install_patches()
     cfg = BiOpenArmLeaderConfig(
-        id=a.id,
-        left_arm_config=OpenArmLeaderConfigBase(port=a.left_port),
-        right_arm_config=OpenArmLeaderConfigBase(port=a.right_port),
+        id=a.teleop_id,
+        left_arm_config=OpenArmLeaderConfigBase(port=a.teleop_left_port),
+        right_arm_config=OpenArmLeaderConfigBase(port=a.teleop_right_port),
     )
     teleop = BiOpenArmLeader(cfg)
     print("\n[注意] 啟動前請讓兩支 leader 自然下垂 (零點姿態)！")
@@ -99,21 +104,32 @@ def run_home(argv):
     from lerobot.robots.openarm_follower import OpenArmFollowerConfigBase
 
     p = argparse.ArgumentParser()
-    p.add_argument("--id", required=True, help="與 lerobot-record 的 --robot.id 相同")
-    p.add_argument("--left-port", default=DEFAULT_FOLLOWER_LEFT_PORT)
-    p.add_argument("--right-port", default=DEFAULT_FOLLOWER_RIGHT_PORT)
+    p.add_argument("--robot.type", dest="robot_type", default="bi_openarm_follower")
+    p.add_argument("--robot.id", dest="robot_id", default=None, help="與 lerobot-record 的 --robot.id 相同")
+    p.add_argument("--robot.left_arm_config.port", dest="robot_left_port", default=DEFAULT_FOLLOWER_LEFT_PORT)
+    p.add_argument("--robot.right_arm_config.port", dest="robot_right_port", default=DEFAULT_FOLLOWER_RIGHT_PORT)
+    p.add_argument("--robot.left_arm_config.side", dest="robot_left_side", default="left")
+    p.add_argument("--robot.right_arm_config.side", dest="robot_right_side", default="right")
     p.add_argument("--home", default=DEFAULT_HOME_PATH, help="reset.json 路徑")
     p.add_argument("--time", type=float, default=DEFAULT_HOME_TIME_S)
     a = p.parse_args(argv)
+    if a.robot_type != "bi_openarm_follower":
+        p.error("--robot.type 必須是 bi_openarm_follower")
+    if not a.robot_id:
+        p.error("--robot.id 為必要參數")
+    if a.robot_left_side != "left":
+        p.error("--robot.left_arm_config.side 必須是 left")
+    if a.robot_right_side != "right":
+        p.error("--robot.right_arm_config.side 必須是 right")
     if not a.home:
         sys.exit("請用 --home reset.json 或 export OPENARM_HOME=reset.json")
     config_mod.DEFAULT_HOME_PATH = a.home
 
     patch_follower_park()
     cfg = BiOpenArmFollowerConfig(
-        id=a.id,
-        left_arm_config=OpenArmFollowerConfigBase(port=a.left_port, side="left"),
-        right_arm_config=OpenArmFollowerConfigBase(port=a.right_port, side="right"),
+        id=a.robot_id,
+        left_arm_config=OpenArmFollowerConfigBase(port=a.robot_left_port, side=a.robot_left_side),
+        right_arm_config=OpenArmFollowerConfigBase(port=a.robot_right_port, side=a.robot_right_side),
     )
     robot = BiOpenArmFollower(cfg)
     print("\n[注意] follower 將開啟力矩並移動，請淨空桌面、手放在急停旁。")
@@ -312,4 +328,3 @@ def run_cli_mode(mode: str, rest: list[str]):
 
         patch_teleop_loop(lerobot_teleoperate)
         lerobot_teleoperate.main()
-

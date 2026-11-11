@@ -262,10 +262,17 @@ python openarm_gc.py rollout \
 python openarm_gc.py teach-slots \
   --task teabag_4slots \
   --slots 4 \
-  --id bi_leader \
-  --left-port can2 \
-  --right-port can3 \
-  --approach-offset-deg 12.0
+  --approach-offset-deg 12.0 \
+  --robot.type=bi_openarm_follower \
+  --robot.left_arm_config.port=can1 \
+  --robot.left_arm_config.side=left \
+  --robot.right_arm_config.port=can0 \
+  --robot.right_arm_config.side=right \
+  --robot.id=bi_follower \
+  --teleop.type=bi_openarm_leader \
+  --teleop.left_arm_config.port=can2 \
+  --teleop.right_arm_config.port=can3 \
+  --teleop.id=bi_leader
 ```
 
 ---
