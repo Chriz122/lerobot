@@ -14,13 +14,16 @@
 import os
 import runpy
 import sys
-import rollout_home                      # 先載入 openarm_src（避免 segfault）
+
+from openarm_src.utils import patches as rollout_home
 
 DEADBAND = float(os.environ.get("OPENARM_GRIPPER_DEADBAND", "3"))
 ALPHA = float(os.environ.get("OPENARM_GRIPPER_SMOOTH", "0.3"))
 
-rollout_home.install_patches()           # 歸位 + 結束回下垂；也會註冊 bi_openarm_follower
-cls = rollout_home._find_bi_follower_cls()
+rollout_home.install_patches()           # 歸位 + 結束回下垂
+from lerobot.robots.bi_openarm_follower import BiOpenArmFollower
+
+cls = BiOpenArmFollower
 
 _active = [False]
 _last = {}
