@@ -15,10 +15,8 @@
 from __future__ import annotations
 
 import asyncio
-from fractions import Fraction
 import json
 import logging
-import os
 import socket
 import threading
 import time

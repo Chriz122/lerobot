@@ -2,18 +2,24 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
-import os
 import subprocess
 import sys
 import time
 
-from openarm_src.utils.config import MOTOR_NAMES
+from openarm_src.utils.config import (
+    DEFAULT_CAN_BITRATE,
+    DEFAULT_CAN_DATA_BITRATE,
+    DEFAULT_CAN_DOWN_ENABLE,
+    DEFAULT_CAN_IFACES,
+    DEFAULT_CAN_SETUP_ENABLE,
+    MOTOR_NAMES,
+)
 
 logger = logging.getLogger("openarm_gc.can_mgr")
 
 
 def get_can_ifaces() -> list[str]:
-    return [x.strip() for x in os.environ.get("OPENARM_CAN_IFACES", "can0,can1,can2,can3").split(",") if x.strip()]
+    return list(DEFAULT_CAN_IFACES)
 
 
 def is_iface_up(iface: str) -> bool:
@@ -44,8 +50,8 @@ def probe_bus(iface: str, target_motors: list[int] | None = None) -> tuple[str, 
         bus = can.interface.Bus(
             channel=iface,
             interface="socketcan",
-            bitrate=1000000,
-            data_bitrate=5000000,
+            bitrate=DEFAULT_CAN_BITRATE,
+            data_bitrate=DEFAULT_CAN_DATA_BITRATE,
             fd=True,
         )
     except Exception as e:
@@ -73,7 +79,7 @@ def can_setup_and_check(max_tries: int = 3):
     """打開 CAN 介面並測試每條 bus 的 8 顆馬達。
     已在 UP 狀態的介面會直接沿用，不需重複 down/up 造成硬體重置與掉包。
     4 條 bus 採多執行緒平行檢測，收到回應即刻返回，將啟動時間從 70+ 秒降為毫秒級。"""
-    if os.environ.get("OPENARM_CAN_SETUP", "1") == "0":
+    if not DEFAULT_CAN_SETUP_ENABLE:
         return
 
     ifaces = get_can_ifaces()
@@ -133,13 +139,13 @@ def can_setup_and_check(max_tries: int = 3):
         logger.info(f"[can] 第 {t} 次測試 {total_found}/{expected}，沒回應：{', '.join(missing_desc)}（耗時 {elapsed*1000:.1f}ms）")
         time.sleep(0.05)
 
-    print(f"\n⚠ 測了 {max_tries} 次仍有馬達沒回應：{', '.join(missing_desc)}")
+    print(f"\n[警告] 測了 {max_tries} 次仍有馬達沒回應：{', '.join(missing_desc)}")
     print("  建議：檢查急停、24V 電源；或關掉 24V 等 10 秒再開。")
     input("  按 Enter 仍要繼續，Ctrl+C 取消 ...")
 
 
 def can_teardown():
-    if os.environ.get("OPENARM_CAN_DOWN", "0") != "1":
+    if not DEFAULT_CAN_DOWN_ENABLE:
         return
     for iface in get_can_ifaces():
         r = subprocess.run(["ip", "link", "set", iface, "down"], capture_output=True, text=True)

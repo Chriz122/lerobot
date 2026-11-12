@@ -6,7 +6,15 @@ import os
 import time
 import numpy as np
 
-from openarm_src.utils.config import JOINT_SIGN
+from openarm_src.utils.config import (
+    DEFAULT_HOME_PATH,
+    DEFAULT_HOME_TIME_S,
+    DEFAULT_HOMING_RATE_HZ,
+    DEFAULT_TABLE_MARGIN_M,
+    DEFAULT_TABLE_Z,
+    DEFAULT_URDF_PATH,
+    JOINT_SIGN,
+)
 
 logger = logging.getLogger("openarm_gc.homing")
 
@@ -91,7 +99,7 @@ def go_home(robot, teleop, waypoints: list[dict[str, float]], duration: float, g
 
     # 先把整條 follower 軌跡算出來，檢查碰桌
     seg_T = duration / len(waypoints)
-    n = max(int(seg_T * 50), 1)
+    n = max(int(seg_T * DEFAULT_HOMING_RATE_HZ), 1)
     plan = []  # (follower_cmd, leader_cmd)
     f_a, l_a = dict(f_now), dict(l_now)
     for wp in waypoints:
@@ -108,7 +116,7 @@ def go_home(robot, teleop, waypoints: list[dict[str, float]], duration: float, g
     # 碰桌檢查要用完整姿態：waypoint 沒寫到的關節用 follower 目前角度
     f_full = {k: float(v) for k, v in obs.items() if k.endswith(".pos")}
     if guard is not None and not guard.check([{**f_full, **p[0]} for p in plan[::5]] + [{**f_full, **plan[-1][0]}]):
-        input("⚠ homing 可能撞桌，已取消。請用 leader 把手臂移到安全位置，再按 Enter 重試...")
+        input("[警告] homing 可能撞桌，已取消。請用 leader 把手臂移到安全位置，再按 Enter 重試...")
         return go_home(robot, teleop, waypoints, duration, guard)
 
     logger.info(f"[gc] 正在通過 {len(waypoints)} 個路徑點移動至起始姿態...")
@@ -128,15 +136,18 @@ def go_home(robot, teleop, waypoints: list[dict[str, float]], duration: float, g
 
 def load_home_config():
     """讀 OPENARM_HOME / OPENARM_HOME_TIME / OPENARM_TABLE_Z，回傳 (waypoints, duration, guard)。"""
-    home_path = os.environ.get("OPENARM_HOME")
+    home_path = DEFAULT_HOME_PATH
     if not home_path:
         logger.warning("[gc] OPENARM_HOME 未設定 -> 不做 homing")
         return None, 0.0, None
     waypoints = load_waypoints(home_path)
-    duration = float(os.environ.get("OPENARM_HOME_TIME", str(3 * len(waypoints) + 1)))
+    duration = DEFAULT_HOME_TIME_S if DEFAULT_HOME_TIME_S != 4.0 else float(3 * len(waypoints) + 1)
     guard = None
-    if "OPENARM_TABLE_Z" in os.environ:
-        guard = TableGuard(os.environ["OPENARM_URDF"], float(os.environ["OPENARM_TABLE_Z"]),
-                           float(os.environ.get("OPENARM_TABLE_MARGIN", "0.05")))
+    if DEFAULT_TABLE_Z is not None and DEFAULT_URDF_PATH is not None:
+        guard = TableGuard(
+            DEFAULT_URDF_PATH,
+            DEFAULT_TABLE_Z,
+            DEFAULT_TABLE_MARGIN_M,
+        )
     return waypoints, duration, guard
 

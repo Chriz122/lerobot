@@ -8,8 +8,21 @@ import time
 
 from openarm_src.utils.config import (
     ARM_JOINTS,
+    DEFAULT_ARDUINO_PORT,
+    DEFAULT_FF_SIGN,
     DEFAULT_FORCE_FEEDBACK_LIMIT,
     DEFAULT_FORCE_FEEDBACK_SCALE,
+    DEFAULT_FORCE_MONITOR_ENABLE,
+    DEFAULT_HOME_AT,
+    DEFAULT_HOME_PATH,
+    DEFAULT_LEADER_SIDE,
+    DEFAULT_LEADER_TRACK_ENABLE,
+    DEFAULT_PARK_ENABLE,
+    DEFAULT_PARK_TIME_S,
+    DEFAULT_PROFILE_ENABLE,
+    DEFAULT_URDF_PATH,
+    DEFAULT_WEBRTC_ENABLE,
+    DEFAULT_WEBRTC_PORT,
 )
 from openarm_src.utils.homing import (
     get_leaders,
@@ -35,7 +48,7 @@ def _call_arguments(function, args, kwargs):
 
 def bind_force_feedback(robot, teleop) -> None:
     """連接 follower 與 leader：leader._gc.set_feedback_source(follower)"""
-    ff_scale = float(os.environ.get("OPENARM_FF_SCALE", DEFAULT_FORCE_FEEDBACK_SCALE))
+    ff_scale = DEFAULT_FORCE_FEEDBACK_SCALE
     if ff_scale <= 0:
         return
 
@@ -64,8 +77,8 @@ def bind_force_feedback(robot, teleop) -> None:
     logger.info(
         "[gc] 力回饋已開啟 (比例=%.3g, 正負號=%+.0f, 上限=%.3g Nm)",
         ff_scale,
-        float(os.environ.get("OPENARM_FF_SIGN", "-1.0")),
-        abs(float(os.environ.get("OPENARM_FF_LIMIT", DEFAULT_FORCE_FEEDBACK_LIMIT))),
+        DEFAULT_FF_SIGN,
+        DEFAULT_FORCE_FEEDBACK_LIMIT,
     )
 
 DAMIAO_ERROR_CODES: dict[int, str] = {
@@ -211,7 +224,7 @@ def _park_path(current: dict[str, float]) -> list[dict[str, float]]:
     """回下垂(零點)的路徑：若有 reset.json，先反向經過中繼點(抬手姿態)，再回零點，避免掃到桌子。"""
     zero = {k: 0.0 for k in current}
     path = []
-    home_path = os.environ.get("OPENARM_HOME")
+    home_path = DEFAULT_HOME_PATH
     if home_path and os.path.exists(home_path):
         wps = load_waypoints(home_path)
         for wp in reversed(wps[:-1]):  # 中繼點反向 (不含最後的起始姿態)
@@ -222,7 +235,7 @@ def _park_path(current: dict[str, float]) -> list[dict[str, float]]:
 
 def follower_park(arm, prefix: str = "", duration_per_seg: float | None = None):
     """單支 OpenArmFollower 慢慢回到下垂姿態 (MIT 位置控制)，之後才讓 LeRobot 關力矩。"""
-    T = duration_per_seg or float(os.environ.get("OPENARM_PARK_TIME", "3"))
+    T = duration_per_seg or DEFAULT_PARK_TIME_S
     present = arm.bus.sync_read("Present_Position")
     cur = {f"{prefix}{m}.pos": float(v) for m, v in present.items()}
     for seg in _park_path(cur):
@@ -238,7 +251,7 @@ def follower_park(arm, prefix: str = "", duration_per_seg: float | None = None):
 
 def bimanual_disconnect(self):
     """雙手設備 (BiOpenArmLeader / BiOpenArmFollower) 同步回位至下垂姿態後，安全中斷連線。"""
-    park_on = os.environ.get("OPENARM_PARK", "1") != "0"
+    park_on = DEFAULT_PARK_ENABLE
     arms = [("left_", self.left_arm), ("right_", self.right_arm)]
     is_leader = hasattr(self.left_arm, "_gc") or not hasattr(self, "send_action")
     label = "主臂" if is_leader else "從臂"
@@ -248,7 +261,7 @@ def bimanual_disconnect(self):
             raise _SkipPark()
 
         logger.info(f"[gc] 正在將雙{label}回位至下垂姿態...")
-        T = float(os.environ.get("OPENARM_PARK_TIME", "3"))
+        T = DEFAULT_PARK_TIME_S
         cur = {}
 
         if is_leader:
@@ -313,7 +326,7 @@ def patch_follower_park():
     if _FOLLOWER_PATCHED:
         return
     _FOLLOWER_PATCHED = True
-    park_on = os.environ.get("OPENARM_PARK", "1") != "0"
+    park_on = DEFAULT_PARK_ENABLE
     from lerobot.robots.bi_openarm_follower import BiOpenArmFollower
     from lerobot.robots.openarm_follower import OpenArmFollower
 
@@ -357,7 +370,7 @@ def install_patches():
     from lerobot.teleoperators.bi_openarm_leader import BiOpenArmLeader
     from lerobot.teleoperators.openarm_leader import OpenArmLeader
 
-    if "OPENARM_URDF" not in os.environ:
+    if not DEFAULT_URDF_PATH:
         sys.exit("請先 export OPENARM_URDF=/path/to/openarm_bimanual.urdf")
 
     orig_bi_init = BiOpenArmLeader.__init__
@@ -375,7 +388,7 @@ def install_patches():
         orig_connect(self, calibrate)
         register_arm(self)
         self._parked = False
-        side = getattr(self, "_gc_side", None) or os.environ.get("OPENARM_LEADER_SIDE")
+        side = getattr(self, "_gc_side", None) or DEFAULT_LEADER_SIDE
         self._gc = LeaderGC(self, side)
         self._gc.start()
         logger.info(f"[gc] {self} 重力補償已開啟 (側別={side})")
@@ -399,12 +412,12 @@ def install_patches():
     def disconnect(self):
         gc = getattr(self, "_gc", None)
         if gc is not None:
-            park_on = os.environ.get("OPENARM_PARK", "1") != "0"
+            park_on = DEFAULT_PARK_ENABLE
             if gc.error is None and park_on and not getattr(self, "_parked", False):
                 # 先慢慢垂回零點 (重力中性姿態)，再關力矩，避免手臂直接摔下
                 try:
                     logger.info(f"[gc] {self}: 關閉力矩前先回到下垂姿態")
-                    T = float(os.environ.get("OPENARM_PARK_TIME", "3"))
+                    T = DEFAULT_PARK_TIME_S
                     gc.move_to({m: 0.0 for m in ARM_JOINTS}, T)
                     time.sleep(0.3)
                 except Exception as e:  # noqa: BLE001
@@ -446,13 +459,13 @@ def install_patches():
 
 def patch_record_loop(module):
     waypoints, duration, guard = load_home_config()
-    when = os.environ.get("OPENARM_HOME_AT", "record")  # "record" 或 "reset"
-    profiler = LoopProfiler() if os.environ.get("OPENARM_PROFILE", "1") != "0" else None
+    when = DEFAULT_HOME_AT  # "record" 或 "reset"
+    profiler = LoopProfiler() if DEFAULT_PROFILE_ENABLE else None
 
     streamer = None
-    if os.environ.get("OPENARM_WEBRTC", "0") == "1":
+    if DEFAULT_WEBRTC_ENABLE:
         from openarm_src.utils.webrtc_streamer import get_webrtc_streamer
-        port = int(os.environ.get("OPENARM_WEBRTC_PORT", "8080"))
+        port = DEFAULT_WEBRTC_PORT
         streamer = get_webrtc_streamer(port=port)
         streamer.start()
 
@@ -483,15 +496,15 @@ def patch_record_loop(module):
 def patch_teleop_loop(module):
     """Bind follower state to leader force feedback after both devices connect."""
     streamer = None
-    if os.environ.get("OPENARM_WEBRTC", "0") == "1":
+    if DEFAULT_WEBRTC_ENABLE:
         from openarm_src.utils.webrtc_streamer import get_webrtc_streamer
-        port = int(os.environ.get("OPENARM_WEBRTC_PORT", "8080"))
+        port = DEFAULT_WEBRTC_PORT
         streamer = get_webrtc_streamer(port=port)
         streamer.start()
 
     arduino_reader = None
-    if os.environ.get("OPENARM_FORCE_MONITOR", "0") == "1":
-        arduino_port = os.environ.get("OPENARM_ARDUINO_PORT")
+    if DEFAULT_FORCE_MONITOR_ENABLE:
+        arduino_port = DEFAULT_ARDUINO_PORT
         if arduino_port:
             try:
                 from openarm_src.test.test_gripper_force import ArduinoReader
@@ -514,7 +527,7 @@ def patch_teleop_loop(module):
             bind_force_feedback(robot, teleop)
 
         # 掛載實時力矩與 Arduino 壓力印出
-        if os.environ.get("OPENARM_FORCE_MONITOR", "0") == "1" and robot is not None:
+        if DEFAULT_FORCE_MONITOR_ENABLE and robot is not None:
             orig_send_action = robot.send_action
             last_print_t = [0.0]
 
@@ -565,65 +578,101 @@ def patch_rollout(module):
     1. 硬體連線完成 (build_rollout_context) 後、policy 開始動之前，leader + follower 一起移到 OPENARM_HOME 起始姿態。
     2. DAgger 推論時 (AUTONOMOUS)，讓 leader 即時鏡像跟隨 follower 移動。
     3. 人類介入時 (CORRECTING)，leader 立即釋放 target，回歸零力重力補償供手動示範。
+    4. DAgger Step Jump 防階躍跳變保護：
+       - 攔截 robot_wrapper.send_action 透過 StepJumpGuard 對關節角度進行單步最大變動量限制 (Rate Limiter)。
+       - 在 DAgger 狀態切換（特別是 PAUSED -> AUTONOMOUS 人類交接回 Policy、PAUSED -> CORRECTING 人類接管）時，
+         自動以當前實際關節角度同步基準，徹底杜絕 Policy 首拍或接管時的劇烈甩動/爆衝。
     """
     waypoints, duration, guard = load_home_config()
     orig = module.build_rollout_context
-    track_leader = os.environ.get("OPENARM_LEADER_TRACK", "1") != "0"
+    track_leader = DEFAULT_LEADER_TRACK_ENABLE
 
     def build_rollout_context(*args, **kwargs):
         ctx = orig(*args, **kwargs)
         teleop = ctx.hardware.teleop
+        robot_wrapper = ctx.hardware.robot_wrapper
+
         if waypoints and teleop is not None:
             # 用原始 robot (不經 ThreadSafeRobot)；此時 inference engine 還沒啟動，不會搶 bus
-            go_home(ctx.hardware.robot_wrapper.inner, teleop, waypoints, duration, guard)
+            go_home(robot_wrapper.inner, teleop, waypoints, duration, guard)
 
-        if track_leader and teleop is not None:
-            leaders = get_leaders(teleop)
-            if leaders:
-                _is_tracking = True
+        # 建立 Step Jump 防跳躍保護器
+        from openarm_src.utils.step_guard import StepJumpGuard
 
-                # 1. 攔截 robot_wrapper.send_action：讓 leader 同步跟隨 follower 目標角度
-                orig_send_action = ctx.hardware.robot_wrapper.send_action
+        step_guard = StepJumpGuard()
+        try:
+            step_guard.sync_from_observation(robot_wrapper.get_observation())
+        except Exception as e:
+            logger.warning(f"[step_guard] 初始姿態同步警告: {e}")
 
-                def send_action_with_tracking(action):
-                    res = orig_send_action(action)
-                    nonlocal _is_tracking
-                    if _is_tracking and isinstance(action, dict):
-                        for prefix, leader in leaders:
-                            leader_cmd = {
-                                key[len(prefix):].removesuffix(".pos"): float(v)
-                                for key, v in action.items()
-                                if key.startswith(prefix)
-                            }
-                            if leader_cmd:
-                                leader._gc.set_target(leader_cmd)
-                    return res
+        leaders = get_leaders(teleop) if (track_leader and teleop is not None) else []
+        _is_tracking = bool(leaders)
 
-                ctx.hardware.robot_wrapper.send_action = send_action_with_tracking
+        # 1. 攔截 robot_wrapper.send_action：加入 Step Jump Guard 速率限制，並同步跟隨 leader
+        orig_send_action = robot_wrapper.send_action
 
-                # 2. Hook DAgger 狀態機切換：進入 CORRECTING 時立刻放開 leader
-                from lerobot.rollout.strategies.dagger import DAggerPhase, DAggerStrategy
+        def send_action_guarded(action):
+            # 經過步長保護器抑制瞬變
+            safe_action = step_guard.clamp(action)
+            res = orig_send_action(safe_action)
 
-                orig_apply_transition = DAggerStrategy._apply_transition
+            nonlocal _is_tracking
+            if _is_tracking and isinstance(safe_action, dict) and leaders:
+                for prefix, leader in leaders:
+                    leader_cmd = {
+                        key[len(prefix):].removesuffix(".pos"): float(v)
+                        for key, v in safe_action.items()
+                        if key.startswith(prefix)
+                    }
+                    if leader_cmd:
+                        leader._gc.set_target(leader_cmd)
+            return res
 
-                def apply_transition_with_tracking(self, old_phase, new_phase, *t_args, **t_kwargs):
-                    nonlocal _is_tracking
-                    if new_phase == DAggerPhase.CORRECTING:
-                        _is_tracking = False
-                        logger.info("[gc] 人類介入 (CORRECTING)：釋放 leader 目標，進入純重力補償手動模式")
-                        for _, leader in leaders:
-                            leader._gc.set_target(None)
-                    elif new_phase == DAggerPhase.AUTONOMOUS:
-                        _is_tracking = True
-                        logger.info("[gc] 恢復自主 (AUTONOMOUS)：啟用 leader 跟隨 follower")
-                    elif new_phase == DAggerPhase.PAUSED:
-                        # 暫停時停止持續更新，但維持在最後位置
-                        _is_tracking = False
+        robot_wrapper.send_action = send_action_guarded
+        logger.info(
+            f"[step_guard] 已啟用 DAgger 步長防跳保護 (max_step_deg={step_guard.max_step_deg}°, "
+            f"max_step_gripper={step_guard.max_step_gripper}°)"
+        )
 
-                    return orig_apply_transition(self, old_phase, new_phase, *t_args, **t_kwargs)
+        # 2. Hook DAgger 狀態機切換：同步當前實際姿態基準，避免交接瞬間跳變
+        from lerobot.rollout.strategies.dagger import DAggerPhase, DAggerStrategy
 
-                DAggerStrategy._apply_transition = apply_transition_with_tracking
-                logger.info("[gc] 已啟用 DAgger Leader 鏡像跟隨 (OPENARM_LEADER_TRACK=1)")
+        orig_apply_transition = DAggerStrategy._apply_transition
+
+        def apply_transition_with_guard(self, old_phase, new_phase, *t_args, **t_kwargs):
+            nonlocal _is_tracking
+            if new_phase == DAggerPhase.CORRECTING:
+                _is_tracking = False
+                logger.info("[gc] 人類介入 (CORRECTING)：釋放 leader 目標，進入純重力補償手動模式")
+                for _, leader in leaders:
+                    leader._gc.set_target(None)
+                # 同步基準為人類介入瞬間的真實角度
+                try:
+                    step_guard.sync_from_observation(robot_wrapper.get_observation())
+                except Exception as e:
+                    logger.warning(f"[step_guard] CORRECTING 姿態同步警告: {e}")
+
+            elif new_phase == DAggerPhase.AUTONOMOUS:
+                _is_tracking = bool(leaders)
+                logger.info("[gc] 恢復自主 (AUTONOMOUS)：啟用 leader 跟隨 follower 並同步防跳躍基準")
+                # 同步基準為人類結束示範時的真實角度，確保 Policy 啟動時首拍動作平滑過渡
+                try:
+                    step_guard.sync_from_observation(robot_wrapper.get_observation())
+                except Exception as e:
+                    logger.warning(f"[step_guard] AUTONOMOUS 姿態同步警告: {e}")
+
+            elif new_phase == DAggerPhase.PAUSED:
+                _is_tracking = False
+                try:
+                    step_guard.sync_from_observation(robot_wrapper.get_observation())
+                except Exception as e:
+                    logger.warning(f"[step_guard] PAUSED 姿態同步警告: {e}")
+
+            return orig_apply_transition(self, old_phase, new_phase, *t_args, **t_kwargs)
+
+        DAggerStrategy._apply_transition = apply_transition_with_guard
+        if leaders:
+            logger.info("[gc] 已啟用 DAgger Leader 鏡像跟隨 (OPENARM_LEADER_TRACK=1)")
 
         return ctx
 

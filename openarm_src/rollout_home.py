@@ -13,8 +13,10 @@
 環境變數：
     OPENARM_GRIPPER_DEADBAND / OPENARM_GRIPPER_SMOOTH  同 client_home.py
     OPENARM_TIMING  1（預設）= 印出每次 SmolVLA 推論時間；0 = 不印
+    DEFAULT_RESET_FILE      起始姿態檔，預設 reset.json
+    DEFAULT_HOME_TIME_S     每一段 waypoint 的移動秒數，預設 4
+    DEFAULT_PARK_ENABLE     1（預設）= 結束時回下垂再關力矩
 """
-import os
 import sys
 import time
 from importlib.metadata import entry_points
