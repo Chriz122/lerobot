@@ -82,7 +82,6 @@ def bind_force_feedback(robot, teleop) -> None:
     )
 
 DAMIAO_ERROR_CODES: dict[int, str] = {
-    0x8: "過壓保護 (Over Voltage - 電壓異常突增)",
     0x9: "欠壓保護 (Under Voltage - 電源接觸不良或電壓過低)",
     0xA: "過流保護 (Over Current - 機械卡死/堵轉或電流過大)",
     0xB: "MOS過溫保護 (MOS Over Temp - 驅動板過熱)",
@@ -677,4 +676,3 @@ def patch_rollout(module):
         return ctx
 
     module.build_rollout_context = build_rollout_context
-

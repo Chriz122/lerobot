@@ -16,7 +16,9 @@ import runpy
 import sys
 
 from openarm_src.utils import patches as rollout_home
+from openarm_src.utils.log_config import configure_logging
 
+configure_logging()
 DEADBAND = float(os.environ.get("OPENARM_GRIPPER_DEADBAND", "3"))
 ALPHA = float(os.environ.get("OPENARM_GRIPPER_SMOOTH", "0.3"))
 

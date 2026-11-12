@@ -10,6 +10,8 @@ from pathlib import Path
 import signal
 import sys
 
+from openarm_src.utils.log_config import configure_logging
+
 # 確保專案根目錄在 sys.path 中（無論在 ~/lerobot 或 ~/lerobot/openarm_src 執行都能正確找到 openarm_src）
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
@@ -27,7 +29,7 @@ logger = logging.getLogger("openarm_gc")
 
 
 def main():
-    logging.basicConfig(level=logging.INFO)
+    configure_logging()
     valid_modes = ("record", "teleoperate", "rollout", "check", "home", "teach-slots", "record-hybrid")
     if len(sys.argv) < 2 or sys.argv[1] not in valid_modes:
         print(__doc__)
