@@ -196,6 +196,33 @@ def resolve_target(system: System) -> Target:
     return target
 
 
+def goto_start(system: System, target: Target) -> None:
+    """真機：把手臂帶到伺服起點 = 示教 s* 的位置再沿接近軸多後退 --start-offset。
+
+    路徑：目前姿態 -> reset.json（依序經過所有 waypoint）-> 示教時的關節姿態 -> 多後退一段。
+    已用 --teleop 手動擺位、或加了 --no-goto 時不執行。
+    """
+    args = system.args
+    if system.dry_run or args.teleop or args.no_goto:
+        return
+    if target.q_standoff is None:
+        print("[Start] 示教檔沒有記錄關節姿態（舊版示教檔或 s* 來自手眼外參），手臂留在目前姿態。"
+              "請重新執行 --mode teach，或加 --teleop 手動擺位。")
+        return
+    if not confirm(system, f"即將經 reset.json 移到示教 s* 的位置，再後退 {args.start_offset * 100:.0f} cm 作為起點"):
+        sys.exit("已取消")
+    robot = system.robot
+    robot.go_home_via_waypoints()
+    if not robot.go_to_joints_checked(target.q_standoff, 4.0, "示教 s* 的位置"):
+        sys.exit("無法安全移動到示教位置，已停止")
+    if args.start_offset > 0 and not system.approach.move_along_approach(-args.start_offset):
+        print(f"[Start] 多後退時被擋下（{robot.last_block_reason}），改從示教位置開始。")
+    robot.settle()
+    if system.approach.observe_average(5) is None:
+        info = system.approach.snapshot(os.path.join(args.out_dir, "start_no_tag.png"))
+        print("[Start] 到達起點後看不到 Tag。\n  " + system.approach.explain_no_tag(info))
+
+
 # ---------------------------------------------------------------------- 殘差訓練
 def train_residual(system: System, out_dir: str) -> None:
     if not confirm(system, "即將在目前姿態附近做微幅試探（每步數 mm）"):
@@ -218,6 +245,7 @@ def run_compare(system: System, out_dir: str) -> None:
     args, cfg = system.args, system.cfg
     maybe_teleop(system, False, "把手臂帶到腕部相機看得到方塊的位置")
     target = resolve_target(system)
+    goto_start(system, target)
     print("\n步驟 1/3：微幅試探並訓練 Jacobian 殘差")
     train_residual(system, out_dir)
 
@@ -382,6 +410,7 @@ def run_approach(system: System, out_dir: str) -> None:
     args = system.args
     maybe_teleop(system, False, "把手臂帶到腕部相機看得到方塊的位置")
     target = resolve_target(system)
+    goto_start(system, target)
     if args.method != "ibvs":
         train_residual(system, out_dir)
     if system.dry_run:
@@ -478,6 +507,10 @@ def main() -> None:
     parser.add_argument("--target-file", default=os.path.join(_HERE, "target_feature.json"))
     parser.add_argument("--retreat", type=float, default=None,
                         help="示教時沿接近軸後退的距離 (m)；預設真機 0.05、模擬 0.10")
+    parser.add_argument("--start-offset", type=float, default=0.05,
+                        help="真機 approach/compare：起點比示教 s* 的位置多後退多少 (m)")
+    parser.add_argument("--no-goto", action="store_true",
+                        help="真機 approach/compare：不自動移到示教位置，從手臂目前姿態開始")
     parser.add_argument("--grasp", action="store_true", help="真機 approach 模式：對準後繼續下降、夾取、提起")
     parser.add_argument("--yes", action="store_true", help="真機：略過每個動作前的確認提示")
     parser.add_argument("--out-dir", default="experiment_outputs")

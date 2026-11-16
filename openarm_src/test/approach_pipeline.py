@@ -48,17 +48,24 @@ class Target:
     s_star: np.ndarray
     descent_m: float            # 伺服收斂後要沿接近軸再前進多少
     source: str                 # 'taught' | 'handeye'
+    # 示教時記錄 s* 當下的關節角 (rad, URDF 慣例)：之後 approach / compare 會先把手臂帶回這附近
+    q_standoff: Optional[np.ndarray] = None
 
     def save(self, path: str, camera: str) -> None:
+        data = {"s_star": [float(x) for x in self.s_star], "descent_m": float(self.descent_m),
+                "source": self.source, "camera": camera}
+        if self.q_standoff is not None:
+            data["q_standoff_rad"] = [float(x) for x in self.q_standoff]
         with open(path, "w", encoding="utf-8") as f:
-            json.dump({"s_star": [float(x) for x in self.s_star], "descent_m": float(self.descent_m),
-                       "source": self.source, "camera": camera}, f, indent=2)
+            json.dump(data, f, indent=2)
 
     @staticmethod
     def load(path: str) -> "Target":
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-        return Target(np.array(data["s_star"], dtype=float), float(data["descent_m"]), data.get("source", "taught"))
+        q = np.array(data["q_standoff_rad"], dtype=float) if "q_standoff_rad" in data else None
+        return Target(np.array(data["s_star"], dtype=float), float(data["descent_m"]),
+                      data.get("source", "taught"), q)
 
 
 @dataclass
@@ -229,7 +236,7 @@ class LastMileApproach:
         while True:
             obs = self.observe_average(15)
             if obs is not None:
-                return Target(obs.s, total, "taught")
+                return Target(obs.s, total, "taught", self.robot.get_joint_positions())
 
             _, p1 = self.robot.tcp_pose()
             moved = p1 - p0

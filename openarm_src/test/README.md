@@ -142,6 +142,8 @@ python main_experiment.py --real --side left --port can1 --serial <D405序號> -
 python main_experiment.py --real --side left --port can1 --serial <D405序號> --mode compare --episodes 5
 ```
 
+伺服起點：`approach` / `compare` 開始時，手臂會自動經 `reset.json` 移到**示教 s\* 時記錄的關節姿態**，再沿接近軸多後退 `--start-offset`（預設 5 cm）作為起點，然後才開始伺服。舊版示教檔沒有記錄關節姿態，要重新示教一次。加 `--no-goto` 則從手臂目前姿態開始；加 `--teleop` 則改用主臂手動擺位。
+
 主從控制（`teleop_position.py`）：
 
 - `teach` 模式預設開啟；`approach` / `compare` 要加 `--teleop` 才會開（用來把手臂帶到看得到 Tag 的位置）。`--no-teleop` 可關閉，從臂會留在目前姿態。

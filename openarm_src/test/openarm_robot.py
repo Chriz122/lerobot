@@ -204,6 +204,48 @@ class OpenArmInterface:
             self.wait_step()
         self.settle()
 
+    def path_clear(self, q_target: np.ndarray) -> bool:
+        """從目前命令角度直線插值到 q_target 的路徑上，TCP 是否都高於桌面（未設定桌面高度時一律通過）。"""
+        if self.table_z_m is None:
+            return True
+        for x in np.linspace(0.0, 1.0, 21):
+            _, p_tcp = self.model.fk(self.q_cmd + x * (np.asarray(q_target, dtype=float) - self.q_cmd))
+            if p_tcp[2] < self.table_z_m + self.table_margin_m:
+                return False
+        return True
+
+    def go_to_joints_checked(self, q_target: np.ndarray, duration_s: float = 4.0, label: str = "目標姿態") -> bool:
+        """真機：對齊命令角度、檢查路徑不低於桌面後，以 min-jerk 走到 q_target。"""
+        self.q_cmd = self.get_joint_positions()
+        if not self.path_clear(q_target):
+            print(f"[OpenArm] 前往{label}的路徑會低於桌面，已略過。")
+            return False
+        print(f"[OpenArm] 前往{label} ...")
+        self.move_to_joints(q_target, duration_s)
+        return True
+
+    def go_home_via_waypoints(self) -> bool:
+        """真機：依序經過 reset.json 的所有 waypoint 到起始姿態（從下垂姿態出發時用，避免掃到桌子）。"""
+        if self.dry_run or self.arm is None:
+            return False
+        from openarm_src.utils.config import DEFAULT_HOME_PATH, DEFAULT_HOME_TIME_S
+        from openarm_src.utils.homing import load_waypoints
+
+        if not DEFAULT_HOME_PATH or not os.path.isfile(DEFAULT_HOME_PATH):
+            print(f"[OpenArm] 找不到起始姿態檔 ({DEFAULT_HOME_PATH})，略過。")
+            return False
+        keys = [f"{self.side}_joint_{i}.pos" for i in range(1, self.num_joints + 1)]
+        waypoints = [wp for wp in load_waypoints(DEFAULT_HOME_PATH) if all(k in wp for k in keys)]
+        if not waypoints:
+            print(f"[OpenArm] {DEFAULT_HOME_PATH} 沒有 {self.side} 手臂的完整關節角，略過。")
+            return False
+        for i, wp in enumerate(waypoints):
+            q = np.radians([wp[k] for k in keys]) * self.signs
+            name = "起始姿態 (reset.json)" if i == len(waypoints) - 1 else f"中繼點 {i + 1}"
+            if not self.go_to_joints_checked(q, DEFAULT_HOME_TIME_S, name):
+                return False
+        return True
+
     def go_home_pose(self, duration_s: Optional[float] = None) -> bool:
         """真機：以 min-jerk 回到 reset.json 的起始姿態（最後一個 waypoint；只動 7 個關節，夾爪不變）。"""
         if self.dry_run or self.arm is None:
