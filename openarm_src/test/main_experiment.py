@@ -476,13 +476,19 @@ def main() -> None:
     parser.add_argument("--target", choices=["auto", "taught", "handeye"], default="auto",
                         help="s* 來源：示教檔或名義手眼外參（auto：模擬用示教；真機有示教檔就用）")
     parser.add_argument("--target-file", default=os.path.join(_HERE, "target_feature.json"))
-    parser.add_argument("--retreat", type=float, default=0.10, help="示教時沿接近軸後退的距離 (m)")
+    parser.add_argument("--retreat", type=float, default=None,
+                        help="示教時沿接近軸後退的距離 (m)；預設真機 0.05、模擬 0.10")
     parser.add_argument("--grasp", action="store_true", help="真機 approach 模式：對準後繼續下降、夾取、提起")
     parser.add_argument("--yes", action="store_true", help="真機：略過每個動作前的確認提示")
     parser.add_argument("--out-dir", default="experiment_outputs")
     args = parser.parse_args()
     if args.episodes <= 0:
         parser.error("--episodes 必須為正整數")
+    if args.retreat is None:
+        # 真機先保守退 5 cm（看不到 Tag 時可在提示中原地再加）；模擬的相機幾何需要 10 cm 才看得到整個 Tag
+        args.retreat = 0.05 if args.real else 0.10
+    if not 0.0 < args.retreat <= 0.20:
+        parser.error("--retreat 需介於 0 與 0.20 m 之間")
 
     os.makedirs(args.out_dir, exist_ok=True)
     print("=" * 70)

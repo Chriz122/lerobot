@@ -189,4 +189,4 @@ python main_experiment.py --real --side left --port can1 --serial <D405序號> -
 | 殘差反而變差 | 訓練訊息中的驗證誤差（learned 應小於 physics）、試探幅度是否太小而被雜訊蓋過、取像時手臂是否已靜止 |
 | Guard 一直退回 IBVS | 殘差未通過驗證（訊息會註明）、`guard_margin_px` 太大、名義模型本來就夠準 |
 | 影像已對準但夾不到 | s\* 是否用示教取得、下降距離、夾爪開度、方塊是否被碰動、夾爪是否傾斜 |
-| 示教後看不到 Tag | 加大 `--retreat`，或檢查相機視野是否被夾爪擋住 |
+| 示教後看不到 Tag | 真機預設只後退 5 cm；在提示中輸入要再後退幾公分，或用 `--retreat` 指定。也可先用 `--mode view` 看相機畫面 |
