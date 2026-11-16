@@ -1,13 +1,14 @@
 # openarm_src/test/camera_stream.py
 """
 Multi-Camera Stream 模組：管理 Intel RealSense D455 (Ego) 與 D405 x 2 (Wrist Left/Right)。
-具備實體相機驅動 (pyrealsense2) 與離線模擬器 (MockMultiCameraStream)，支援隨時測試。
+- RealSenseMultiCamera：實體相機 (pyrealsense2)
+- SimCameraStream     ：離線模擬，影像由 SimWorld 依 3D 幾何算出
+兩者介面相同：get_frames() -> {相機名稱: FrameData}
 """
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
-import cv2
+from typing import Dict, Iterable, Optional
 import numpy as np
-from config import CameraConfig, SystemConfig
+from config import CameraConfig
 
 
 @dataclass
@@ -20,8 +21,10 @@ class FrameData:
 
 class RealSenseMultiCamera:
     """管理真實 Intel RealSense D455 與 D405 相機串流"""
-    def __init__(self, camera_configs: Dict[str, CameraConfig]):
-        self.configs = camera_configs
+    def __init__(self, camera_configs: Dict[str, CameraConfig], only: Optional[Iterable[str]] = None):
+        # only：只開啟指定的相機（IBVS 只需要一台腕部相機，少開可省 USB 頻寬）
+        names = set(only) if only is not None else set(camera_configs)
+        self.configs = {k: v for k, v in camera_configs.items() if k in names}
         self.pipelines = {}
         self.intrinsics = {}
         self.is_connected = False
@@ -100,64 +103,15 @@ class RealSenseMultiCamera:
         self.is_connected = False
 
 
-class MockMultiCameraStream:
-    """離線模擬環境相機串流：合成出帶有 AprilTag 的 Cube 影像，供離線演算法與控制閉迴路驗證"""
-    def __init__(self, sys_config: SystemConfig):
-        self.cfg = sys_config
-        self.tag_family = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
-        # 產生一個 AprilTag 圖案
-        self.tag_img = np.zeros((120, 120), dtype=np.uint8)
-        cv2.aruco.generateImageMarker(self.tag_family, id=0, sidePixels=120, img=self.tag_img, borderBits=1)
+class SimCameraStream:
+    """離線模擬相機：只有裝在手臂上的那台腕部相機有畫面。"""
+    def __init__(self, world):
+        self.world = world
+        self.is_connected = True
 
-    def generate_synthetic_frames(self, current_pixel_error: np.ndarray,
-                                   depth_m: float = 0.22) -> Dict[str, FrameData]:
-        """依據當前模擬特徵誤差動態生成影像"""
-        frames = {}
-        # 內參矩陣模擬
-        fx, fy = 615.0, 615.0
-        cx, cy = self.cfg.ibvs.desired_center_u, self.cfg.ibvs.desired_center_v
-        K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float32)
-        dist = np.zeros(5, dtype=np.float32)
+    def get_frames(self) -> Dict[str, FrameData]:
+        color, camera_matrix, dist = self.world.render()
+        return {self.world.camera_name: FrameData(color=color, camera_matrix=camera_matrix, dist_coeffs=dist)}
 
-        for cam_key, cam_cfg in self.cfg.cameras.items():
-            img = np.full((cam_cfg.height, cam_cfg.width, 3), 45, dtype=np.uint8)
-            # 繪製桌面工作區網格
-            for gx in range(0, cam_cfg.width, 50):
-                cv2.line(img, (gx, 0), (gx, cam_cfg.height), (55, 55, 55), 1)
-            for gy in range(0, cam_cfg.height, 50):
-                cv2.line(img, (0, gy), (cam_cfg.width, gy), (55, 55, 55), 1)
-
-            # 計算 Tag 在當前相機畫面的中心
-            if "wrist" in cam_key:
-                # wrist 相機隨手臂運動而改變誤差
-                u_c = int(cx + current_pixel_error[0])
-                v_c = int(cy + current_pixel_error[1])
-                tag_scale = 90
-            else:
-                # ego (D455) 俯視視角，Tag 位置相對穩定
-                u_c = int(cam_cfg.width / 2 + current_pixel_error[0] * 0.3)
-                v_c = int(cam_cfg.height / 2 + current_pixel_error[1] * 0.3)
-                tag_scale = 55
-
-            # 貼上 5x5x5 cube 底座與 AprilTag
-            cube_half = int(tag_scale * 0.7)
-            top_left = (max(0, u_c - cube_half), max(0, v_c - cube_half))
-            bot_right = (min(cam_cfg.width - 1, u_c + cube_half), min(cam_cfg.height - 1, v_c + cube_half))
-            cv2.rectangle(img, top_left, bot_right, (180, 140, 60), -1) # 木質/黃色 Cube
-
-            # 貼上 AprilTag
-            resized_tag = cv2.resize(self.tag_img, (tag_scale, tag_scale))
-            tag_bgr = cv2.cvtColor(resized_tag, cv2.COLOR_GRAY2BGR)
-            th, tw = tag_bgr.shape[:2]
-            y1 = max(0, v_c - th // 2)
-            y2 = min(cam_cfg.height, y1 + th)
-            x1 = max(0, u_c - tw // 2)
-            x2 = min(cam_cfg.width, x1 + tw)
-            if (y2 - y1) == th and (x2 - x1) == tw:
-                img[y1:y2, x1:x2] = tag_bgr
-
-            # 建立合成深度圖 (毫米)
-            depth_img = np.full((cam_cfg.height, cam_cfg.width), int(depth_m * 1000), dtype=np.uint16)
-            frames[cam_key] = FrameData(color=img, depth=depth_img, camera_matrix=K, dist_coeffs=dist)
-
-        return frames
+    def stop(self):
+        self.is_connected = False

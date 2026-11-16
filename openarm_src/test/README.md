@@ -1,100 +1,184 @@
-# OpenArm + RealSense (D455 + D405*2) + AprilTag Cube 視覺伺服實驗套件
+# OpenArm + RealSense + AprilTag Cube：最後一哩靠近與夾取
 
-本目錄針對 **OpenArm 機械手臂**、**Intel RealSense D455 (Ego)**、**Intel RealSense D405 x 2 (雙腕相機)** 與 **5×5×5 cm AprilTag Cube** 部署最後一哩操作（Last-Mile Manipulation）實驗。
+本目錄實作 **OpenArm 手臂如何靠近並夾起 5×5×5 cm AprilTag 方塊**，做法依循《ACT／VLA Last-Mile Manipulation：學生快速實作指南》：
 
-完全落實《學生快速實作指南》規範：
-> **核心原則：** 先跑傳統 IBVS，再學習「傳統物理模型算錯多少」（Physics-Informed Residual），最後加入保守收斂檢查（Convergence Guard）。
+> 先跑傳統 IBVS，再學習「傳統物理模型算錯多少」（Physics-Informed Residual），最後加入保守的收斂檢查（Convergence Guard）。
+
+套件的示範程式是 2 維影像誤差 (u, v) 的離線模擬。只對準 (u, v) 手臂不會往方塊前進，所以這裡把同一套方法擴成 4 維，並接上運動學、下降與夾取。
 
 ---
 
-## 1. 目錄結構與模組職責
+## 1. 手臂如何靠近方塊
 
 ```
-openarm_src/test/
-├── config.py                 # 硬體與控制參數（D455/D405、Cube尺寸、關節限位、目標特徵 s*）
-├── camera_stream.py          # 多相機管理器（pyrealsense2 實機驅動 + Mock 離線合成串流）
-├── tag_detector.py           # AprilTag (tag36h11) 偵測器與 3D 姿態估計 (cv2.aruco)
-├── openarm_robot.py          # OpenArm 機械手臂介面封裝（安全限幅、速度限制、Dry-Run 模擬）
-├── ibvs_pinn_controller.py   # IBVS + Physics-Informed Residual + Convergence Guard 控制器
-├── data_collector.py         # 安全微幅試探 (Dithering) 資料收集腳本
-├── main_experiment.py        # 完整三方法 (IBVS / Learned / Guarded) 閉迴路實驗與評估主程式
-├── requirements.txt          # 相依套件清單
-└── README.md                 # 本說明文件
+ Slow Policy（ACT/VLA、遙操作或 homing）把手臂帶到「腕部相機看得到 Tag」的位置
+                               │
+                               ▼
+ ┌─ 前置 ──────────────────────────────────────────────────────────────────┐
+ │ [示教 s*]  夾爪擺在「閉合就能夾到」的位置 → 沿接近軸後退 d → 記錄 s*    │
+ │ [微幅試探] 在原地附近送小命令 a，量 Tag 特徵變化 Δs → 訓練 Jacobian 殘差 │
+ └─────────────────────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+ ┌─ SERVO：閉迴路 IBVS（20 Hz）────────────────────────────────────────────┐
+ │ 腕部 D405 取像 → 偵測 Tag → s = [u, v, w, ψ]                            │
+ │ e = s − s*                                                              │
+ │ 命令 a = [dx, dy, dz, dyaw]（相機座標）                                  │
+ │    ibvs    : u_IBVS = −λ·J_phys⁺·e                                      │
+ │    learned : u_nom  = −λ·(J_phys + ΔJθ)⁺·e                              │
+ │    guarded : 預測 u_nom 比 u_IBVS 好才採用，否則退回 u_IBVS              │
+ │ a → 手臂雅可比（阻尼最小二乘）→ 7 軸關節增量 → 限幅與安全檢查 → 送出     │
+ │ 中心 ≤ 3px、視邊長 ≤ 3px、偏轉 ≤ 2° 連續 3 幀 → 收斂                    │
+ └─────────────────────────────────────────────────────────────────────────┘
+                               │  此時夾爪在方塊正上方固定高度，且已轉正
+                               ▼
+   DESCEND：沿夾爪接近軸開迴路直線下降 d
+                               ▼
+   GRASP  ：閉合夾爪，夾爪停在半路 = 夾到東西
+                               ▼
+   LIFT   ：沿接近軸後退提起
 ```
 
+四個特徵各自負責一件事：
+
+| 特徵 | 意義 | 由哪個命令修正 |
+|---|---|---|
+| `u, v` | Tag 中心像素 | `dx, dy`：水平對準 |
+| `w` | Tag 視邊長（√像素面積），`w = f·L/Z` | `dz`：**靠近到預備距離** |
+| `ψ` | Tag 在影像中的旋轉角（對 90° 取模） | `dyaw`：夾爪轉正對齊方塊邊 |
+
+幾個設計重點：
+
+- **先對準再靠近**：中心誤差大於 130 px 時不前進，40 px 以內才全速前進；Tag 貼近畫面邊緣時也停止前進，避免 Tag 跑出畫面。
+- **最後一段開迴路**：太近時 Tag 會超出視野或失焦（D405 最近約 7 cm），所以伺服只做到預備距離，剩下的固定距離直線下降。
+- **s\* 用示教取得**：示教時後退多少，之後就下降多少，不需要手眼標定。若改用 `config.py` 的名義手眼外參推算 s\*，外參誤差會直接變成夾取位置誤差（見第 4 節）。
+- **殘差寫成乘法** `ΔJθ = J_phys·Mθ`：J_phys 隨深度約以 1/Z 變化，而手眼、運動學誤差大致是「命令被扭曲了多少」，與深度無關。這樣在遠處試探學到的修正才能用到近處。
+- **守門之外再加實測監看**：指南的守門條件只是模型預測。這裡另外監看實際量到的誤差，採用殘差後連續 3 步沒下降，該回合就停用殘差；任何方法只要誤差明顯發散就中止。
+
 ---
 
-## 2. 硬體配置與標籤設定
+## 2. 檔案
 
-- **機械手臂**：OpenArm (6-DOF)，本實驗主要以末端/前兩軸進行局部視覺伺服對準。
-- **視角配置**：
-  - `ego` (**D455**)：架設於手臂基座上方或全局俯視視角，負責全局監控與宏觀定位。
-  - `wrist_left` (**D405**)：左腕部微距深度相機，最近對焦距離可達 7cm，作為最後一哩 IBVS 主伺服相機。
-  - `wrist_right` (**D405**)：右腕部相機，提供輔助視角或雙臂協同觀測。
-- **待夾物**：$5\text{ cm} \times 5\text{ cm} \times 5\text{ cm}$ 立方體。
-  - 正上方中心貼有 **AprilTag 36h11 (ID: 0)**，標籤邊長設定為 $5\text{ cm} \times 5\text{ cm}$（滿版貼合）。
+| 檔案 | 內容 |
+|---|---|
+| `config.py` | 所有參數與單位說明（相機、方塊、手眼外參、限幅、收斂門檻、模擬誤差） |
+| `tag_detector.py` | AprilTag 偵測，輸出特徵 `[u, v, w, ψ]` |
+| `ibvs_pinn_controller.py` | 解析 interaction matrix、殘差模型（ridge / torch）、守門、實測監看 |
+| `arm_kinematics.py` | 相機座標命令 → 7 軸關節增量（Pinocchio + URDF；模擬用近似模型） |
+| `openarm_robot.py` | 手臂介面與安全檢查（模擬 / lerobot `OpenArmFollower`） |
+| `camera_stream.py` | RealSense 串流 / 模擬相機 |
+| `sim_world.py` | 離線模擬世界：依 3D 幾何算出影像，並判定是否夾得到 |
+| `approach_pipeline.py` | 示教、伺服、下降、夾取、提起 |
+| `data_collector.py` | 微幅安全試探（有邊界的隨機漫步） |
+| `main_experiment.py` | 主程式：`compare` / `approach` / `teach` 三種模式 |
+| `test_ibvs_approach.py` | 離線測試 |
+| `check_cameras.py` | 列出 RealSense 序號、預覽 Tag 偵測 |
 
 ---
 
-## 3. 快速上手步驟
+## 3. 離線模擬（不需任何硬體）
 
-### 步驟 1：安裝相依套件
-在 Python 3.8+ 環境下執行：
 ```bash
 cd openarm_src/test
-pip install numpy matplotlib opencv-python torch scipy
-# 若要在真實機台上連接 RealSense 相機：
-pip install pyrealsense2
+pip install numpy opencv-python          # 選用：matplotlib（曲線圖）、torch（--learner torch）
+
+python main_experiment.py                                  # 三方法比較，各 15 回合
+python main_experiment.py --learner torch
+python main_experiment.py --mode approach --method guarded # 單次完整流程，逐步印出誤差
+python main_experiment.py --target handeye                 # 改用名義手眼外參推算 s*
+pytest test_ibvs_approach.py
 ```
 
-### 步驟 2：相機序號確認與 AprilTag 檢驗
-執行檢查工具查看已連接之 D455 / D405 序號：
+輸出在 `experiment_outputs/`：`experiment_results.csv`（彙整）、`experiment_episodes.csv`（每回合，含失敗原因）、`experiment_error_curves.csv`、`probe_data.npz`，有裝 matplotlib 時另有 `experiment_error_curves.png`。
+
+模擬中的「真實世界」刻意與控制器的名義模型不同（手眼外參轉了 3°/−2°/15°、偏移數 mm，連桿長 4%，關節只追到命令的 90%，另有像素與關節雜訊），控制器只能透過影像得知結果。
+
+---
+
+## 4. 模擬參考結果
+
+固定種子 2026、15 回合、方塊隨機偏移 ±4.5 cm 與 ±30°、起始距離約 30 cm：
+
+| 方法 | 伺服成功 | 平均最終誤差 | 平均步數 | 夾取成功 | 夾取 XY 偏差 |
+|---|---|---|---|---|---|
+| IBVS | 100% | 0.62 px | 40.4 | 100% | 0.9 mm |
+| Learned (ridge) | 100% | 0.51 px | 40.6 | 100% | 0.8 mm |
+| Guarded (ridge) | 100% | 0.61 px | 40.4 | 100% | 0.8 mm |
+
+- 三種方法差異很小。這組條件下名義模型已經夠準，而且步數主要被單步上限（4 mm）決定，殘差能改善的空間有限。Learned／Guarded 不會永遠優於 IBVS。
+- 改用 `--target handeye` 時，三種方法伺服都收斂，但夾取全部失敗（XY 偏差約 16 mm、偏轉約 15°）。影像誤差收斂只代表到達 s\*，s\* 本身錯了就夾不到，殘差模型修不了這件事。
+- 以上只是這組合成條件下的結果，**不代表真實手臂的成功率，也不構成收斂保證**。
+
+---
+
+## 5. 真機流程
+
+真機部分**尚未在實體手臂上執行過**，第一次上機請逐步確認。
+
+需求：Linux + SocketCAN、`pyrealsense2`、Pinocchio，並設定 `OPENARM_URDF`（與 `openarm_gc.py` 相同）；建議設定 `OPENARM_TABLE_Z` 啟用桌面防撞。
+
 ```bash
+export PYTHONPATH=$HOME/lerobot
+export OPENARM_URDF=/path/to/openarm.urdf
+export OPENARM_TABLE_Z=...                    # 桌面在 URDF 世界座標的高度 (m)
+
+# 1) 確認相機序號與 Tag 偵測
 python check_cameras.py
-```
-將輸出的序號填入 `config.py` 中的 `cameras` 區段。
 
-### 步驟 3：執行離線 Dry-Run 模擬實驗（不需馬達或實體相機）
-```bash
-python main_experiment.py --learner ridge --episodes 15
-```
-或者使用 PyTorch MLP 學習器：
-```bash
-python main_experiment.py --learner torch --episodes 15
-```
-程式會自動完成：
-1. 執行安全小步長試探（收集 120 筆 $\Delta q \to \Delta s^{\text{obs}}$ 資料）。
-2. 訓練殘差雅可比 $\Delta J_\theta$。
-3. 對同一個初始狀態分組執行 **IBVS**、**Learned**、**Guarded** 三種方法。
-4. 輸出終端統計表，並產生 `experiment_outputs/experiment_results.csv` 與 `experiment_error_curves.png`。
+# 2) 示教 s*：先用遙操作把張開的夾爪擺到「閉合就能夾到方塊」的位置
+python main_experiment.py --real --side left --port can1 --serial <D405序號> --mode teach
 
-### 步驟 4：真機閉迴路工作流 (Real Robot Workflow)
-確認硬體與方向無誤後，使用 `--real` 旗標啟動：
-```bash
-python main_experiment.py --real --camera wrist_left --episodes 10
+# 3) 無接觸對準：先用純 IBVS，確認方向正確
+python main_experiment.py --real --side left --port can1 --serial <D405序號> --mode approach --method ibvs
+
+# 4) 加入殘差與守門（會先做微幅試探）
+python main_experiment.py --real --side left --port can1 --serial <D405序號> --mode approach
+
+# 5) 對準無誤後才下夾
+python main_experiment.py --real --side left --port can1 --serial <D405序號> --mode approach --grasp
+
+# 6) 三方法比較（只對準、不下夾；每回合從相同起點加上相同的初始偏移）
+python main_experiment.py --real --side left --port can1 --serial <D405序號> --mode compare --episodes 5
 ```
+
+每個動作前會要求按 Enter 確認（`--yes` 可略過）。結束或 Ctrl+C 時，手臂會先回下垂姿態再關力矩。
+
+上機前要確認的設定（`config.py`）：
+
+| 項目 | 說明 |
+|---|---|
+| `HandEyeConfig` | 腕部相機相對 TCP 的位置與朝向。只需大致正確，但若軸向差很多（例如 90°），純 IBVS 會往錯的方向走 |
+| `approach_axis_tcp` | TCP 座標中夾爪前進的方向，預設 +z，請對照 URDF 的 `hand_tcp` |
+| `gripper_open_deg` / `gripper_closed_deg` | 預設 −55 / 0，請先確認實機正負號 |
+| `tag_size_meters` | Tag **黑框**邊長。滿版 5 cm 的 Tag 需要周圍有淺色背景才偵測得到；若列印時留白邊，這裡要填黑框的實際邊長 |
+| `JOINT_SIGN`（`openarm_src/utils/config.py`） | LeRobot 角度與 URDF 角度的正負號 |
+
+安全機制（`openarm_robot.py`、`approach_pipeline.py`）：
+
+1. 單步命令上限 4 mm / 1.5°，單步單關節上限 2°。
+2. 關節軟限位與 lerobot `OpenArmFollower` 相同，再內縮 1°。
+3. TCP 低於桌面 + 餘裕、或離起點超過 45 cm 時，該步取消。
+4. 連續 15 幀看不到 Tag、或誤差發散時中止伺服。
+5. 預設只做無接觸對準，加 `--grasp` 才會下降夾取。
 
 ---
 
-## 4. 真機標準作業工作流 (Real Robot SOP)
+## 6. 目前的限制
 
-```
-[階段 1: 硬體巡檢與頻寬配置] 
-   └── 3 台相機獨立 USB 3.0 Hub / 埠確認 -> E-Stop 急停按鈕就緒
-[階段 2: 標籤視覺驗證與方向確認] 
-   └── 5x5 cm Tag36h11 辨識率確認 -> 無接觸手動微動驗證 +/- 方向
-[階段 3: 原地微幅試探 (Dithering)] 
-   └── 執行 data_collector.py (關節增量 < 0.015 rad) -> 擬合 Delta J_theta
-[階段 4: 三方法真機對比實驗] 
-   └── 相同初始偏移測試: 純 IBVS vs 學習殘差 vs 守門機制 (Guarded)
-[階段 5: 銜接下夾 (Last-Mile Grasp)] 
-   └── 誤差 <= 3px -> 下降 Z 軸至預備高度 -> 閉合夾爪 -> 提起驗證
-```
+- **粗定位不在範圍內**：腕部相機要先看得到 Tag。把手臂帶到附近是 Slow Policy（ACT／VLA、遙操作、homing）的工作；`ego` (D455) 相機目前沒有用到。
+- **只控制 4 個自由度**：夾爪傾斜角（roll／pitch）維持起始姿態，不會自動修正。起始時夾爪需大致垂直於方塊頂面。
+- **下降是開迴路**：下降途中不再看 Tag，方塊若在這段時間被碰動就會夾偏。
+- **夾取判定很粗略**：真機只看夾爪是否停在半路，沒有使用力矩或壓力感測器。
+- **近似運動學只供模擬**：`ApproxArmModel` 不是 OpenArm 的真實幾何，真機一律使用 URDF。
 
 ---
 
-## 4. 實機安全守則（依指南第 7 條）
+## 7. 常見問題
 
-1. **先做無接觸對準**：確認相機座標系、影像特徵方向與關節增量正負號一致，切勿一開始就直接測試下夾動作。
-2. **單步增量嚴格限幅**：`config.py` 中已預設 `max_delta_q_rad = 0.035 rad`（約 2 度），防止因模型預測偏差產生劇烈運動。
-3. **退回機制保證**：Convergence Guard 會在每一步檢查候選命令的預測誤差，若未達最低改善門檻 $\delta$，立即退回名義 IBVS 解析指令。
+| 現象 | 優先檢查 |
+|---|---|
+| 動作方向反了 | `HandEyeConfig.rpy_deg`、`JOINT_SIGN`、`approach_axis_tcp` |
+| 殘差反而變差 | 訓練訊息中的驗證誤差（learned 應小於 physics）、試探幅度是否太小而被雜訊蓋過、取像時手臂是否已靜止 |
+| Guard 一直退回 IBVS | 殘差未通過驗證（訊息會註明）、`guard_margin_px` 太大、名義模型本來就夠準 |
+| 影像已對準但夾不到 | s\* 是否用示教取得、下降距離、夾爪開度、方塊是否被碰動、夾爪是否傾斜 |
+| 示教後看不到 Tag | 加大 `--retreat`，或檢查相機視野是否被夾爪擋住 |

@@ -19,6 +19,32 @@ class TagDetectionResult:
     rvec: Optional[np.ndarray] = None# 旋轉向量 (solvePnP)
     tvec: Optional[np.ndarray] = None# 平移向量 (solvePnP) [x, y, z] 相對相機 (公尺)
     depth_m: float = 0.0             # 估計或測距之深度 (公尺)
+    side_px: float = 0.0             # Tag 視邊長 sqrt(面積)，等效深度特徵
+    yaw_deg: float = 0.0             # Tag 在影像中的旋轉角，已對 90 度取模到 [-45, 45)
+
+    @property
+    def feature(self) -> np.ndarray:
+        """IBVS 特徵向量 s = [u, v, w, psi]"""
+        return np.array([self.center[0], self.center[1], self.side_px, self.yaw_deg], dtype=float)
+
+
+def wrap_quarter_turn(angle_deg):
+    """把角度對 90 度取模到 [-45, 45)（方塊四面對稱，轉 90 度視為相同）。"""
+    return (np.asarray(angle_deg, dtype=float) + 45.0) % 90.0 - 45.0
+
+
+def polygon_area(corners: np.ndarray) -> float:
+    """鞋帶公式（浮點，不做整數取整）"""
+    x, y = corners[:, 0], corners[:, 1]
+    return float(0.5 * abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
+
+
+def tag_yaw_deg(corners: np.ndarray) -> float:
+    """以上、下兩條邊的平均方向估計 Tag 在影像中的旋轉角。"""
+    top = corners[1] - corners[0]
+    bottom = corners[2] - corners[3]
+    direction = top / (np.linalg.norm(top) + 1e-9) + bottom / (np.linalg.norm(bottom) + 1e-9)
+    return float(wrap_quarter_turn(np.degrees(np.arctan2(direction[1], direction[0]))))
 
 
 class AprilTagDetector:
@@ -83,7 +109,7 @@ class AprilTagDetector:
         detected_id = int(ids[selected_idx])
         corners = corners_list[selected_idx][0].astype(np.float32) # (4, 2)
         center = np.mean(corners, axis=0) # (2,) [u, v]
-        area = float(cv2.contourArea(corners.astype(np.int32)))
+        area = polygon_area(corners)
 
         rvec, tvec, depth_m = None, None, 0.0
         if camera_matrix is not None:
@@ -103,7 +129,9 @@ class AprilTagDetector:
             area=area,
             rvec=rvec,
             tvec=tvec,
-            depth_m=depth_m
+            depth_m=depth_m,
+            side_px=float(np.sqrt(max(area, 0.0))),
+            yaw_deg=tag_yaw_deg(corners),
         )
 
     def draw_overlay(self, image: np.ndarray, res: TagDetectionResult,

@@ -1,109 +1,110 @@
 # openarm_src/test/data_collector.py
 """
-微幅安全試探資料收集器 (Safe Dithering Probe)：
-依照指南要求，在安全範圍內施加微小關節增量 Δq，觀測 AprilTag 影像位移 Δs_obs，
-以建立 Physics-Informed Residual 訓練集，避免損壞機構。
+微幅安全試探資料收集器 (Safe Dithering Probe)。
+
+依指南第 3 節：在目前姿態附近施加微小命令 a，觀測 AprilTag 特徵變化 ds_obs，
+建立 (s, a, ds_obs) 資料集來訓練 Jacobian 殘差。真正的 J_real 不必直接量到。
+
+做法是「有邊界的隨機漫步」：每步隨機取一個小命令；若預測會讓 Tag 離開起點附近的
+安全框（中心偏移、視邊長變化都有上限），就改成往起點拉回的命令。
+這樣資料涵蓋起點附近一小塊區域，而不是只有單一點。
+
+單獨執行（離線模擬）： python data_collector.py
+真機：                 python data_collector.py --real --side left --port can1
 """
-import argparse
-import time
+from __future__ import annotations
+
+from typing import Dict, Optional
+
 import numpy as np
-from config import SystemConfig
-from tag_detector import AprilTagDetector
-from camera_stream import RealSenseMultiCamera, MockMultiCameraStream
-from openarm_robot import OpenArmInterface
+
+from ibvs_pinn_controller import depth_from_size, feature_error, interaction_matrix
 
 
-def collect_probe_dataset(n_samples: int = 150, dry_run: bool = True,
-                          active_camera: str = "wrist_left",
-                          out_path: str = "probe_data.npz"):
-    cfg = SystemConfig()
-    detector = AprilTagDetector(tag_size_m=cfg.target.tag_size_meters)
-    robot = OpenArmInterface(cfg.robot, dry_run=dry_run)
+def collect_probe_dataset(approach, n_samples: Optional[int] = None, seed: int = 42,
+                          out_path: Optional[str] = None, verbose: bool = True) -> Dict[str, np.ndarray]:
+    cfg = approach.cfg
+    pc = cfg.probe
+    n_samples = n_samples or pc.n_samples
+    robot = approach.robot
+    rng = np.random.default_rng(seed)
+    amp = np.array([pc.amp_xy_mm, pc.amp_xy_mm, pc.amp_z_mm, pc.amp_yaw_deg])
 
-    if dry_run:
-        cam_stream = MockMultiCameraStream(cfg)
-    else:
-        cam_stream = RealSenseMultiCamera(cfg.cameras)
+    start = approach.observe_average(5)
+    if start is None:
+        raise RuntimeError("試探起點看不到 Tag：請先把手臂移到腕部相機看得到方塊的位置")
+    s0, intr = start.s, start.intr
+    if verbose:
+        print(f"[DataCollector] 開始微幅安全試探 ({n_samples} 筆)，單步上限 "
+              f"±{pc.amp_xy_mm}mm / ±{pc.amp_yaw_deg}deg，保持無接觸。")
 
-    q_list, dq_list, ds_list = [], [], []
-    sim_error = np.array([35.0, -25.0], dtype=np.float32)
-
-    print(f"\n[DataCollector] 開始微幅安全試探收集 ({n_samples} 筆)...")
-    print("安全規則：僅在目前姿態附近施加微幅抖動 (±0.015 rad)，保持無接觸影像對準。")
-
-    rng = np.random.default_rng(42)
-
-    for i in range(n_samples):
-        q_before = robot.get_joint_positions()[:2]
-
-        # 讀取試探前影像特徵
-        if dry_run:
-            frames = cam_stream.generate_synthetic_frames(sim_error)
-        else:
-            frames = cam_stream.get_frames()
-
-        frame_data = frames.get(active_camera)
-        if frame_data is None:
+    s_list, a_list, ds_list = [], [], []
+    attempts = 0
+    while len(s_list) < n_samples and attempts < n_samples * 3:
+        attempts += 1
+        before = approach.observe()
+        if before is None:
+            robot.settle()
             continue
-        res_before = detector.detect(frame_data.color, frame_data.camera_matrix, frame_data.dist_coeffs)
-        if not res_before.detected:
+
+        depth = depth_from_size(before.s[2], intr.f, cfg.target.tag_size_meters)
+        j_phys = interaction_matrix(before.s, depth, intr)
+        action = rng.uniform(-amp, amp)
+        predicted = before.s + j_phys @ action
+        drift = feature_error(predicted, s0)
+        outside = (
+            np.hypot(drift[0], drift[1]) > pc.box_center_px
+            or abs(drift[2]) > pc.box_size_ratio * s0[2]
+            or abs(drift[3]) > 12.0
+        )
+        if outside:
+            # 往起點拉回，但仍保留一點隨機性
+            pull = -np.linalg.pinv(j_phys) @ feature_error(before.s, s0)
+            scale = float(np.max(np.abs(pull) / amp))
+            action = pull / scale if scale > 1.0 else pull
+            action = action + 0.3 * rng.uniform(-amp, amp)
+
+        if not approach.move_camera(action):
+            if verbose:
+                print(f"  試探命令被安全檢查擋下: {robot.last_block_reason}")
             continue
-        s_before = res_before.center.copy()
-
-        # 生成微幅安全增量 (約 0.5 ~ 1.0 度)
-        dq_cmd = rng.uniform(-0.015, 0.015, size=2).astype(np.float32)
-        robot.step_joint_delta(dq_cmd)
-
-        if dry_run:
-            # 模擬真實環境微幅非線性映射 (加雜訊)
-            true_J = np.array([[15.2 + 1.2*np.sin(q_before[0]), 1.1],
-                               [0.8, 14.1 + 0.9*np.cos(q_before[1])]])
-            sim_error += true_J @ dq_cmd + rng.normal(0, 0.2, size=2)
-            time.sleep(0.01)
-            frames_after = cam_stream.generate_synthetic_frames(sim_error)
-        else:
-            time.sleep(0.05) # 等待機械手臂微動平穩
-            frames_after = cam_stream.get_frames()
-
-        frame_after = frames_after.get(active_camera)
-        if frame_after is None:
+        robot.settle()                      # 等手臂靜止再取像，避免時間不同步
+        after = approach.observe()
+        if after is None:
             continue
-        res_after = detector.detect(frame_after.color, frame_after.camera_matrix, frame_after.dist_coeffs)
-        if not res_after.detected:
-            continue
-        s_after = res_after.center.copy()
 
-        # 觀測到位移量
-        ds_obs = s_after - s_before
+        s_list.append(before.s)
+        a_list.append(action)
+        ds_list.append(feature_error(after.s, before.s))
+        if verbose and (len(s_list) % 30 == 0 or len(s_list) == n_samples):
+            print(f"  進度: {len(s_list)}/{n_samples}")
 
-        q_list.append(q_before)
-        dq_list.append(dq_cmd)
-        ds_list.append(ds_obs)
-
-        # 復原試探動作 (保持在工作區中心)
-        robot.step_joint_delta(-dq_cmd)
-        if dry_run:
-            sim_error -= true_J @ dq_cmd
-
-        if (i + 1) % 25 == 0 or i == n_samples - 1:
-            print(f"  進度: {i+1}/{n_samples} 筆完成")
-
-    # 儲存資料集
-    q_arr = np.array(q_list)
-    dq_arr = np.array(dq_list)
-    ds_arr = np.array(ds_list)
-    np.savez_compressed(out_path, q=q_arr, dq=dq_arr, ds=ds_arr)
-    print(f"[DataCollector] 資料集收集完成，共儲存 {len(q_arr)} 筆樣本至: {out_path}\n")
-    return q_arr, dq_arr, ds_arr
+    data = {
+        "s": np.array(s_list), "a": np.array(a_list), "ds": np.array(ds_list),
+        "intr": np.array([intr.f, intr.cx, intr.cy, intr.width, intr.height], dtype=float),
+    }
+    if out_path:
+        np.savez_compressed(out_path, **data)
+        if verbose:
+            print(f"[DataCollector] 共 {len(s_list)} 筆樣本，已儲存至 {out_path}")
+    return data
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--samples", type=int, default=120, help="試探採樣數")
-    parser.add_argument("--dry-run", action="store_true", default=True, help="使用模擬 Dry-Run")
-    parser.add_argument("--real", dest="dry_run", action="store_false", help="連接真實機器人與相機")
-    parser.add_argument("--camera", default="wrist_left", choices=["wrist_left", "wrist_right", "ego"])
-    parser.add_argument("--out", default="probe_data.npz")
+    import argparse
+    import os
+
+    from main_experiment import add_hardware_args, build_system
+
+    parser = argparse.ArgumentParser(description="微幅安全試探資料收集")
+    add_hardware_args(parser)
+    parser.add_argument("--samples", type=int, default=None, help="試探樣本數（預設見 config.ProbeConfig）")
+    parser.add_argument("--out", default=os.path.join("experiment_outputs", "probe_data.npz"))
     args = parser.parse_args()
 
-    collect_probe_dataset(args.samples, args.dry_run, args.camera, args.out)
+    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    system = build_system(args)
+    try:
+        collect_probe_dataset(system.approach, args.samples, out_path=args.out)
+    finally:
+        system.close()

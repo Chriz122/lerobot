@@ -1,9 +1,12 @@
 # openarm_src/test/requirements.txt
 numpy>=1.22.0
-matplotlib>=3.5.0
-opencv-python>=4.7.0
-torch>=2.0.0
-scipy>=1.9.0
+opencv-python>=4.7.0        # 需含 cv2.aruco (4.7 以上內建)
 
-# 實體相機連接時選用 (真實 RealSense D455 / D405 串流)
-# pyrealsense2
+# 選用
+# matplotlib>=3.5.0         # 輸出誤差曲線圖 (沒裝會略過，仍會輸出 CSV)
+# torch>=2.0.0              # --learner torch
+# pytest                    # 執行 test_ibvs_approach.py
+
+# 真機才需要
+# pyrealsense2              # RealSense D455 / D405 串流
+# pin                       # Pinocchio：以 OPENARM_URDF 計算精確運動學
