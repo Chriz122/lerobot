@@ -519,7 +519,7 @@ def main() -> None:
         parser.error("--episodes 必須為正整數")
     if args.retreat is None:
         # 真機先保守退 5 cm（看不到 Tag 時可在提示中原地再加）；模擬的相機幾何需要 10 cm 才看得到整個 Tag
-        args.retreat = 0.05 if args.real else 0.10
+        args.retreat = 0.03 if args.real else 0.10
     if not 0.0 < args.retreat <= 0.20:
         parser.error("--retreat 需介於 0 與 0.20 m 之間")
 
