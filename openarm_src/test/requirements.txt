@@ -1,0 +1,9 @@
+# openarm_src/test/requirements.txt
+numpy>=1.22.0
+matplotlib>=3.5.0
+opencv-python>=4.7.0
+torch>=2.0.0
+scipy>=1.9.0
+
+# 實體相機連接時選用 (真實 RealSense D455 / D405 串流)
+# pyrealsense2
