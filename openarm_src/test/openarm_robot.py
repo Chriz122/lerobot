@@ -204,10 +204,43 @@ class OpenArmInterface:
             self.wait_step()
         self.settle()
 
+    def go_home_pose(self, duration_s: Optional[float] = None) -> bool:
+        """真機：以 min-jerk 回到 reset.json 的起始姿態（最後一個 waypoint；只動 7 個關節，夾爪不變）。"""
+        if self.dry_run or self.arm is None:
+            return False
+        from openarm_src.utils.config import DEFAULT_HOME_PATH, DEFAULT_HOME_TIME_S
+        from openarm_src.utils.homing import load_waypoints
+
+        if not DEFAULT_HOME_PATH or not os.path.isfile(DEFAULT_HOME_PATH):
+            print(f"[OpenArm] 找不到起始姿態檔 ({DEFAULT_HOME_PATH})，略過回起始姿態。")
+            return False
+        home = load_waypoints(DEFAULT_HOME_PATH)[-1]
+        keys = [f"{self.side}_joint_{i}.pos" for i in range(1, self.num_joints + 1)]
+        if not all(k in home for k in keys):
+            print(f"[OpenArm] {DEFAULT_HOME_PATH} 沒有 {self.side} 手臂的完整關節角，略過回起始姿態。")
+            return False
+        q_home = np.radians([home[k] for k in keys]) * self.signs
+
+        # 先對齊命令角度，再檢查整段路徑不會低於桌面
+        self.q_cmd = self.get_joint_positions()
+        if self.table_z_m is not None:
+            for x in np.linspace(0.0, 1.0, 21):
+                _, p_tcp = self.model.fk(self.q_cmd + x * (q_home - self.q_cmd))
+                if p_tcp[2] < self.table_z_m + self.table_margin_m:
+                    print("[OpenArm] 回起始姿態的路徑會低於桌面，已略過。")
+                    return False
+        print(f"[OpenArm] 回到起始姿態 ({os.path.basename(DEFAULT_HOME_PATH)}) ...")
+        self.move_to_joints(q_home, duration_s or DEFAULT_HOME_TIME_S)
+        return True
+
     def stop(self) -> None:
-        """結束：真機會先回下垂姿態再關力矩（由 patch_follower_park 處理）。"""
+        """結束：真機先回 reset.json 起始姿態，再回下垂姿態並關力矩（後者由 patch_follower_park 處理）。"""
         if self.dry_run or self.arm is None:
             return
+        try:
+            self.go_home_pose()
+        except Exception as e:  # noqa: BLE001
+            print(f"[OpenArm] 回起始姿態失敗: {e}")
         print("[OpenArm] 結束控制，手臂回下垂姿態後關閉力矩 ...")
         try:
             self.arm.disconnect()

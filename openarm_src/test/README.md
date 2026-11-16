@@ -149,7 +149,7 @@ python main_experiment.py --real --side left --port can1 --serial <D405序號> -
 - `--port` / `--leader-port` 省略時，依 `--side` 取 `openarm_src/utils/config.py` 的預設（左：從臂 can1、主臂 can2；右：從臂 can0、主臂 can3）。
 - 主臂校正檔 id 預設為 `openarm_<side>_leader`，不同時用 `--leader-id` 指定。
 
-每個動作前會要求按 Enter 確認（`--yes` 可略過）。結束或 Ctrl+C 時，手臂會先回下垂姿態再關力矩。
+每個動作前會要求按 Enter 確認（`--yes` 可略過）。結束或 Ctrl+C 時，從臂會先回到 `reset.json`（`OPENARM_HOME`）的起始姿態，再回下垂姿態並關力矩；回起始姿態只動 7 個關節，夾爪維持原狀。
 
 上機前要確認的設定（`config.py`）：
 
