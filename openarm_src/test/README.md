@@ -72,6 +72,7 @@
 | `data_collector.py` | 微幅安全試探（有邊界的隨機漫步） |
 | `main_experiment.py` | 主程式：`compare` / `approach` / `teach` 三種模式 |
 | `test_ibvs_approach.py` | 離線測試 |
+| `teleop_position.py` | 真機主從擺位：用主臂把從臂帶到位，按 Enter 結束 |
 | `check_cameras.py` | 列出 RealSense 序號、預覽 Tag 偵測 |
 
 ---
@@ -125,8 +126,8 @@ export OPENARM_TABLE_Z=...                    # 桌面在 URDF 世界座標的�
 # 1) 確認相機序號與 Tag 偵測
 python check_cameras.py
 
-# 2) 示教 s*：先用遙操作把張開的夾爪擺到「閉合就能夾到方塊」的位置
-python main_experiment.py --real --side left --port can1 --serial <D405序號> --mode teach
+# 2) 示教 s*：程式會先開主從控制，用主臂把張開的夾爪擺到「閉合就能夾到方塊」的位置，按 Enter 後記錄
+python main_experiment.py --real --side left --port can1 --leader-port can2 --serial <D405序號> --mode teach
 
 # 3) 無接觸對準：先用純 IBVS，確認方向正確
 python main_experiment.py --real --side left --port can1 --serial <D405序號> --mode approach --method ibvs
@@ -140,6 +141,13 @@ python main_experiment.py --real --side left --port can1 --serial <D405序號> -
 # 6) 三方法比較（只對準、不下夾；每回合從相同起點加上相同的初始偏移）
 python main_experiment.py --real --side left --port can1 --serial <D405序號> --mode compare --episodes 5
 ```
+
+主從控制（`teleop_position.py`）：
+
+- `teach` 模式預設開啟；`approach` / `compare` 要加 `--teleop` 才會開（用來把手臂帶到看得到 Tag 的位置）。`--no-teleop` 可關閉，從臂會留在目前姿態。
+- 連線前主臂要自然下垂（LeRobot 會把連線當下的姿態設為零點）。連線後主臂會先自動走到從臂目前的姿態，再放開讓你帶動。
+- `--port` / `--leader-port` 省略時，依 `--side` 取 `openarm_src/utils/config.py` 的預設（左：從臂 can1、主臂 can2；右：從臂 can0、主臂 can3）。
+- 主臂校正檔 id 預設為 `openarm_<side>_leader`，不同時用 `--leader-id` 指定。
 
 每個動作前會要求按 Enter 確認（`--yes` 可略過）。結束或 Ctrl+C 時，手臂會先回下垂姿態再關力矩。
 

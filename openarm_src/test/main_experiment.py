@@ -13,7 +13,7 @@ OpenArm 最後一哩實驗主程式：手臂靠近並夾起 5x5x5 cm AprilTag �
   python main_experiment.py --mode approach --method guarded
 
 真機（需 pinocchio + OPENARM_URDF；先讀 README 的安全守則）：
-  python main_experiment.py --real --side left --port can1 --mode teach
+  python main_experiment.py --real --side left --port can1 --leader-port can2 --mode teach   # 會先開主從控制
   python main_experiment.py --real --side left --port can1 --mode approach            # 只對準，不下夾
   python main_experiment.py --real --side left --port can1 --mode approach --grasp
   python main_experiment.py --real --side left --port can1 --mode compare --episodes 5
@@ -49,6 +49,7 @@ METHODS = ["ibvs", "learned", "guarded"]
 LABELS = {"ibvs": "Baseline (Pure IBVS)", "learned": "IBVS + Learned Residual",
           "guarded": "IBVS + Residual + Convergence Guard"}
 _HERE = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.dirname(os.path.dirname(_HERE))
 
 
 # ---------------------------------------------------------------------- 系統組裝
@@ -73,7 +74,12 @@ class System:
 def add_hardware_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--real", action="store_true", help="連接真實手臂與相機（預設為離線模擬）")
     parser.add_argument("--side", choices=["left", "right"], default="left", help="使用哪一支手臂")
-    parser.add_argument("--port", default=None, help="真機 CAN 埠，例如 can1")
+    parser.add_argument("--port", default=None, help="真機從臂 CAN 埠（預設依 --side 取 openarm_src/utils/config.py 的設定）")
+    parser.add_argument("--leader-port", default=None, help="主臂 CAN 埠，主從擺位用（預設同上）")
+    parser.add_argument("--leader-id", default=None, help="主臂校正檔 id（預設 openarm_<side>_leader）")
+    parser.add_argument("--teleop", dest="teleop", action="store_true", default=None,
+                        help="開始前先開主從控制，用主臂把從臂擺到位（teach 模式預設開啟）")
+    parser.add_argument("--no-teleop", dest="teleop", action="store_false", help="不開主從控制，從臂留在目前姿態")
     parser.add_argument("--camera", default=None, choices=["wrist_left", "wrist_right"],
                         help="伺服用的腕部相機（預設為 wrist_<side>）")
     parser.add_argument("--serial", default=None, help="該腕部相機的 RealSense 序號（多台相機時必填）")
@@ -99,6 +105,14 @@ def build_system(args: argparse.Namespace) -> System:
         camera = SimCameraStream(world)
     else:
         world = None
+        if _REPO_ROOT not in sys.path:
+            sys.path.insert(0, _REPO_ROOT)
+        from teleop_position import default_ports
+
+        follower_default, leader_default = default_ports(args.side)
+        args.port = args.port or follower_default
+        args.leader_port = getattr(args, "leader_port", None) or leader_default
+        print(f"[Ports] 從臂 {args.side}: {args.port} | 主臂 {args.side}: {args.leader_port}")
         try:
             model = load_arm_model(args.side, allow_approx=False)
         except RuntimeError as e:
@@ -123,6 +137,19 @@ def confirm(system: System, message: str) -> bool:
         return True
     answer = input(f"\n[確認] {message}。手放在急停旁，按 Enter 繼續，輸入 n 取消: ")
     return answer.strip().lower() not in ("n", "no")
+
+
+def maybe_teleop(system: System, default: bool, purpose: str) -> None:
+    """真機：先開主從控制，讓使用者用主臂把從臂擺到位。"""
+    if system.dry_run:
+        return
+    enabled = default if getattr(system.args, "teleop", None) is None else system.args.teleop
+    if not enabled:
+        print("[Teleop] 未開主從控制，從臂留在目前姿態。")
+        return
+    from teleop_position import teleop_until_enter
+
+    teleop_until_enter(system.robot, system.args.leader_port, getattr(system.args, "leader_id", None), purpose)
 
 
 # ---------------------------------------------------------------------- 期望特徵 s*
@@ -188,6 +215,7 @@ def train_residual(system: System, out_dir: str) -> None:
 # ---------------------------------------------------------------------- 模式：比較
 def run_compare(system: System, out_dir: str) -> None:
     args, cfg = system.args, system.cfg
+    maybe_teleop(system, False, "把手臂帶到腕部相機看得到方塊的位置")
     target = resolve_target(system)
     print("\n步驟 1/3：微幅試探並訓練 Jacobian 殘差")
     train_residual(system, out_dir)
@@ -351,6 +379,7 @@ def save_outputs(out_dir: str, summary: List[Dict], episodes: List[Dict],
 # ---------------------------------------------------------------------- 模式：單次靠近
 def run_approach(system: System, out_dir: str) -> None:
     args = system.args
+    maybe_teleop(system, False, "把手臂帶到腕部相機看得到方塊的位置")
     target = resolve_target(system)
     if args.method != "ibvs":
         train_residual(system, out_dir)
@@ -394,7 +423,8 @@ def run_teach(system: System) -> None:
     if system.dry_run:
         target = sim_teach(system)
     else:
-        print("示教前提：夾爪已張開、位於「閉合就能夾到方塊」的位置（可先用遙操作擺好）。")
+        maybe_teleop(system, True, "把張開的夾爪擺到「閉合就能夾到方塊」的位置")
+        print("示教前提：夾爪已張開、位於「閉合就能夾到方塊」的位置。")
         if not confirm(system, f"即將沿接近軸後退 {args.retreat * 100:.0f} cm 並記錄影像特徵"):
             sys.exit("已取消")
         system.robot.mark_start()
