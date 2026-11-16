@@ -17,10 +17,12 @@ s* 有兩種來源：
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Callable, Dict, List, Optional
 
+import cv2
 import numpy as np
 
 from arm_kinematics import HandEye, camera_twist_to_joint_delta, tcp_twist_to_joint_delta
@@ -29,7 +31,6 @@ from ibvs_pinn_controller import (
     IBVSPINNController,
     Intrinsics,
     action_to_camera_twist,
-    feature_error,
 )
 from tag_detector import AprilTagDetector, wrap_quarter_turn
 
@@ -177,14 +178,78 @@ class LastMileApproach:
         return True
 
     # ------------------------------------------------------------------ 示教
-    def teach(self, retreat_m: float) -> Target:
-        """手臂目前在「閉合就能夾到」的位置：後退 retreat_m 後記錄 s*。"""
+    def snapshot(self, path: Optional[str] = None) -> Dict:
+        """診斷用：抓一張影像，列出看到的所有 Tag，並把標註後的影像存檔。"""
+        info: Dict = {"has_frame": False, "ids": [], "path": None, "size": None, "brightness": None}
+        frame = self.camera.get_frames().get(self.camera_name)
+        if frame is None or frame.color is None:
+            return info
+        ids, corners_list = self.detector.detect_all(frame.color)
+        height, width = frame.color.shape[:2]
+        info.update(has_frame=True, ids=ids, size=(width, height), brightness=float(np.mean(frame.color)))
+        if path:
+            image = frame.color.copy()
+            cv2.drawMarker(image, (width // 2, height // 2), (255, 255, 0), cv2.MARKER_CROSS, 24, 2)
+            for tag_id, corners in zip(ids, corners_list):
+                pts = corners.reshape(-1, 2).astype(np.int32)
+                cv2.polylines(image, [pts], True, (0, 255, 0), 2)
+                cv2.putText(image, f"ID {tag_id}", (int(pts[0][0]), int(pts[0][1])),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            if cv2.imwrite(path, image):
+                info["path"] = path
+        return info
+
+    def explain_no_tag(self, info: Dict) -> str:
+        """把 snapshot 的結果翻成「為什麼看不到 Tag」的說明。"""
+        want = self.cfg.target.tag_id
+        if not info["has_frame"]:
+            return f"相機 [{self.camera_name}] 沒有回傳影像：請確認 --serial 與 USB 連線。"
+        lines = [f"影像 {info['size'][0]}x{info['size'][1]}，平均亮度 {info['brightness']:.0f}/255。"]
+        if info["ids"] and want not in info["ids"]:
+            lines.append(f"畫面中有 Tag ID {info['ids']}，但 config.py 的 tag_id 是 {want}：請改 TargetObjectConfig.tag_id。")
+        elif not info["ids"]:
+            lines.append("畫面中沒有偵測到任何 tag36h11。常見原因：Tag 不在畫面內或被夾爪擋住、距離太近而模糊、"
+                         "Tag 黑框外沒有淺色邊（滿版貼在深色背景上）、畫面過暗或過曝、--serial 填到別台相機。")
+        if info["path"]:
+            lines.append(f"已存下當下畫面：{info['path']}（請打開確認相機實際看到什麼）")
+        return "\n  ".join(lines)
+
+    def teach(self, retreat_m: float, debug_dir: Optional[str] = None,
+              ask_more: Optional[Callable[[float], Optional[float]]] = None) -> Target:
+        """手臂目前在「閉合就能夾到」的位置：後退 retreat_m 後記錄 s*。
+
+        看不到 Tag 時會存下畫面並說明原因；若提供 ask_more（回傳要再後退幾公尺，None 表示放棄），
+        可以原地加大後退距離重試，不必重新擺位。
+        """
+        r0, p0 = self.robot.tcp_pose()
+        total = retreat_m
         if not self.move_along_approach(-retreat_m):
             raise RuntimeError(f"示教後退失敗: {self.robot.last_block_reason}")
-        obs = self.observe_average(15)
-        if obs is None:
-            raise RuntimeError("後退後看不到 Tag：請加大後退距離，或確認相機視野與對焦")
-        return Target(obs.s, retreat_m, "taught")
+        while True:
+            obs = self.observe_average(15)
+            if obs is not None:
+                return Target(obs.s, total, "taught")
+
+            _, p1 = self.robot.tcp_pose()
+            moved = p1 - p0
+            along = -float((r0.T @ moved) @ self.handeye.approach)
+            print(f"\n[Teach] 後退 {total * 100:.0f} cm 後看不到 Tag (ID {self.cfg.target.tag_id})。")
+            print(f"  TCP 實際位移（基座座標）: dx {moved[0] * 100:+.1f}  dy {moved[1] * 100:+.1f}  "
+                  f"dz {moved[2] * 100:+.1f} cm；沿接近軸後退 {along * 100:.1f} cm。")
+            print("  夾爪朝下時，後退應該是 dz 為正（往上）。若方向不對，請修正 HandEyeConfig.approach_axis_tcp。")
+            path = os.path.join(debug_dir, "teach_no_tag.png") if debug_dir else None
+            print("  " + self.explain_no_tag(self.snapshot(path)))
+
+            extra = ask_more(total) if ask_more is not None else None
+            if not extra:
+                raise RuntimeError("後退後看不到 Tag，示教未完成（原因見上方說明）")
+            if total + extra > self.cfg.grasp.max_descent_m:
+                print(f"  [注意] 總後退距離超過 grasp.max_descent_m ({self.cfg.grasp.max_descent_m * 100:.0f} cm)，"
+                      "之後下夾會被拒絕，需一併調大該設定。")
+            if not self.move_along_approach(-extra):
+                raise RuntimeError(f"示教後退失敗: {self.robot.last_block_reason}")
+            total += extra
 
     # ------------------------------------------------------------------ 伺服
     def servo(self, target: Target, mode: str = "guarded", verbose: bool = False,

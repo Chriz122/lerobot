@@ -6,6 +6,7 @@ OpenArm 最後一哩實驗主程式：手臂靠近並夾起 5x5x5 cm AprilTag �
   compare  （預設）先做微幅試探訓練殘差，再用相同初始狀態比較 IBVS / Learned / Guarded
   approach  執行一次完整流程：伺服靠近 ->（--grasp）下降、夾取、提起
   teach     示教期望特徵 s*：手臂先擺在「閉合就能夾到」的位置，再執行本模式
+  view      不移動手臂，檢查腕部相機目前看到什麼（畫面存到 <out-dir>/view.png）
 
 離線模擬（不需任何硬體）：
   python main_experiment.py
@@ -417,7 +418,37 @@ def run_approach(system: System, out_dir: str) -> None:
         print(f"[失敗] {grasp.reason}")
 
 
-# ---------------------------------------------------------------------- 模式：示教
+# ---------------------------------------------------------------------- 模式：示教 / 檢視
+def ask_more_retreat(total_m: float) -> Optional[float]:
+    """示教看不到 Tag 時，問使用者要不要原地再後退一點。"""
+    answer = input(f"\n[Teach] 目前已後退 {total_m * 100:.0f} cm。"
+                   "輸入要「再後退」幾公分後重試（例如 3），直接按 Enter 放棄: ")
+    try:
+        extra_cm = float(answer.strip())
+    except ValueError:
+        return None
+    if not 0.0 < extra_cm <= 10.0:
+        print("  只接受 0~10 公分。")
+        return None
+    return extra_cm / 100.0
+
+
+def run_view(system: System, out_dir: str) -> None:
+    """不移動手臂（除非加 --teleop）：看腕部相機目前看到什麼，並把畫面存檔。"""
+    maybe_teleop(system, False, "把手臂帶到想檢查的位置")
+    approach = system.approach
+    info = approach.snapshot(os.path.join(out_dir, "view.png"))
+    obs = approach.observe_average(10)
+    if obs is None:
+        print("[View] 看不到目標 Tag。\n  " + approach.explain_no_tag(info))
+        return
+    s = obs.s
+    print(f"[View] 看到 Tag：u {s[0]:.1f}, v {s[1]:.1f}, 視邊長 {s[2]:.1f}px, 旋轉 {s[3]:+.1f}deg；"
+          f"估計距離 {obs.depth_pnp_m * 100:.1f} cm；畫面中的 Tag ID: {info['ids']}")
+    if info["path"]:
+        print(f"[View] 畫面已存至 {info['path']}")
+
+
 def run_teach(system: System) -> None:
     args = system.args
     if system.dry_run:
@@ -428,7 +459,7 @@ def run_teach(system: System) -> None:
         if not confirm(system, f"即將沿接近軸後退 {args.retreat * 100:.0f} cm 並記錄影像特徵"):
             sys.exit("已取消")
         system.robot.mark_start()
-        target = system.approach.teach(args.retreat)
+        target = system.approach.teach(args.retreat, debug_dir=args.out_dir, ask_more=ask_more_retreat)
     target.save(args.target_file, system.approach.camera_name)
     s = target.s_star
     print(f"[Teach] s*=[u {s[0]:.1f}, v {s[1]:.1f}, w {s[2]:.1f}px, psi {s[3]:.1f}deg]，"
@@ -438,7 +469,7 @@ def run_teach(system: System) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="OpenArm 最後一哩：IBVS + 殘差 + 守門，靠近並夾取 AprilTag 方塊")
     add_hardware_args(parser)
-    parser.add_argument("--mode", choices=["compare", "approach", "teach"], default="compare")
+    parser.add_argument("--mode", choices=["compare", "approach", "teach", "view"], default="compare")
     parser.add_argument("--method", choices=METHODS, default="guarded", help="approach 模式使用的控制方法")
     parser.add_argument("--episodes", type=int, default=15, help="compare 模式每種方法的回合數")
     parser.add_argument("--samples", type=int, default=None, help="試探樣本數")
@@ -466,8 +497,12 @@ def main() -> None:
             run_compare(system, args.out_dir)
         elif args.mode == "approach":
             run_approach(system, args.out_dir)
+        elif args.mode == "view":
+            run_view(system, args.out_dir)
         else:
             run_teach(system)
+    except RuntimeError as e:
+        print(f"\n[錯誤] {e}")
     except KeyboardInterrupt:
         print("\n[中斷] 使用者按下 Ctrl+C，停止動作。")
     finally:

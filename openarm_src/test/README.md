@@ -129,22 +129,6 @@ python check_cameras.py
 # 2) 示教 s*：程式會先開主從控制，用主臂把張開的夾爪擺到「閉合就能夾到方塊」的位置，按 Enter 後記錄
 python main_experiment.py --real --side left --port can1 --leader-port can2 --serial 353322271542 --mode teach
 
-# [確認] 即將沿接近軸後退 10 cm 並記錄影像特徵。手放在急停旁，按 Enter 繼續，輸入 n 取消: 
-# [OpenArm] 回到起始姿態 (reset.json) ...
-# [OpenArm] 結束控制，手臂回下垂姿態後關閉力矩 ...
-# Traceback (most recent call last):
-#   File "/home/chris/lerobot/openarm_src/test/main_experiment.py", line 478, in <module>
-#     main()
-#   File "/home/chris/lerobot/openarm_src/test/main_experiment.py", line 470, in main
-#     run_teach(system)
-#   File "/home/chris/lerobot/openarm_src/test/main_experiment.py", line 431, in run_teach
-#     target = system.approach.teach(args.retreat)
-#              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-#   File "/home/chris/lerobot/openarm_src/test/approach_pipeline.py", line 186, in teach
-#     raise RuntimeError("後退後看不到 Tag：請加大後退距離，或確認相機視野與對焦")
-# RuntimeError: 後退後看不到 Tag：請加大後退距離，或確認相機視野與對焦
-
-
 # 3) 無接觸對準：先用純 IBVS，確認方向正確
 python main_experiment.py --real --side left --port can1 --serial <D405序號> --mode approach --method ibvs
 

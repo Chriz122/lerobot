@@ -79,6 +79,19 @@ class AprilTagDetector:
             [-s, -s, 0.0]
         ], dtype=np.float32)
 
+    def detect_all(self, color_img: np.ndarray):
+        """回傳影像中所有 tag36h11 的 (ids, corners_list)，不管 ID；診斷用。"""
+        if color_img is None or color_img.size == 0:
+            return [], []
+        gray = cv2.cvtColor(color_img, cv2.COLOR_BGR2GRAY) if len(color_img.shape) == 3 else color_img
+        if self.detector is not None:
+            corners_list, ids, _ = self.detector.detectMarkers(gray)
+        else:
+            corners_list, ids, _ = cv2.aruco.detectMarkers(gray, self.dictionary, parameters=self.parameters)
+        if ids is None:
+            return [], []
+        return [int(i) for i in ids.flatten()], list(corners_list)
+
     def detect(self, color_img: np.ndarray, camera_matrix: Optional[np.ndarray] = None,
                dist_coeffs: Optional[np.ndarray] = None, target_id: Optional[int] = None) -> TagDetectionResult:
         """
