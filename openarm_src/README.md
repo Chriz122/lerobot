@@ -48,6 +48,8 @@
 | `OPENARM_PARK` | 布林值 | `1` (開啟) | 結束退出時是否先平滑回垂下姿態再關閉力矩 (1=開啟, 0=關閉直落) |
 | `OPENARM_PARK_TIME` | 浮點數 | `3.0` | 回垂下姿態每段路徑的移動秒數 |
 | `OPENARM_HOMING_RATE_HZ` | 浮點數 | `50.0` | Homing 軌跡插值發送頻率 (Hz) |
+| `OPENARM_GRIPPER_SCALE` | 浮點數 | `1.0` | (`rollout_home.py` / `eval_trials.py`) 推論期間夾爪目標角度倍率。0° = 全閉，`0.8` 會夾更緊，但全開也從 -65° 變 -52° |
+| `OPENARM_GRIPPER_KP` | 浮點數 | 不改 (`25`) | (`rollout_home.py` / `eval_trials.py`) 推論期間夾爪 kp，夾緊力 ≈ kp × 擠壓角度；歸位與回下垂時會還原 |
 
 ### 2. 主臂重力補償與雙向力回饋 (Gravity Comp & Force Feedback)
 
@@ -70,7 +72,7 @@
 
 | 環境變數 | 型別 | 預設值 | 說明 |
 | :--- | :---: | :---: | :--- |
-| `OPENARM_STEP_GUARD` | 布林值 | `1` (開啟) | 是否啟用 DAgger 單步動作防跳變限幅保護器 |
+| `OPENARM_STEP_GUARD` | 布林值 | `1` (開啟) | 是否啟用單步動作防跳變限幅保護器 (DAgger rollout、`rollout_home.py` / `eval_trials.py` 推論期間) |
 | `OPENARM_MAX_STEP_DEG` | 浮點數 | `4.0` | 每拍 (1/30s) 最大容許關節移動度數 (30 FPS 下相當於 120°/s) |
 | `OPENARM_MAX_STEP_GRIPPER` | 浮點數 | `15.0` | 每拍最大容許夾爪移動度數 |
 | `OPENARM_WARN_THROTTLE_S` | 浮點數 | `2.0` | 防跳變告警日誌節流間隔 (秒) |

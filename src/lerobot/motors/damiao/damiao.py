@@ -200,10 +200,13 @@ class DamiaoMotorsBus(MotorsBusBase):
             self._is_connected = False
             raise ConnectionError(f"Failed to connect to CAN bus: {e}") from e
 
-    def _handshake(self) -> None:
+    def _handshake(self, max_attempts: int = 3) -> None:
         """
         Verify all motors are present and populate initial state cache.
-        Raises ConnectionError if any motor fails to respond.
+
+        Motors that do not answer are re-pinged up to ``max_attempts`` times in total: the first
+        motor queried on a freshly opened bus occasionally misses its first frame and answers fine
+        on the next one. Raises ConnectionError if any motor still fails to respond.
         """
         logger.info("Starting handshake with motors...")
 
@@ -214,35 +217,47 @@ class DamiaoMotorsBus(MotorsBusBase):
         while self.canbus.recv(timeout=0.01):
             pass
 
-        missing_motors = []
-        for motor_name in self.motors:
-            motor_id = self._get_motor_id(motor_name)
-            recv_id = self._get_motor_recv_id(motor_name)
+        missing_motors: list[str] = list(self.motors)
+        for attempt in range(1, max_attempts + 1):
+            pending, missing_motors = missing_motors, []
+            for motor_name in pending:
+                motor_id = self._get_motor_id(motor_name)
+                recv_id = self._get_motor_recv_id(motor_name)
 
-            # Send enable command
-            data = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, CAN_CMD_ENABLE]
-            msg = can.Message(arbitration_id=motor_id, data=data, is_extended_id=False, is_fd=self.use_can_fd)
-            self.canbus.send(msg)
+                # Send enable command
+                data = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, CAN_CMD_ENABLE]
+                msg = can.Message(
+                    arbitration_id=motor_id, data=data, is_extended_id=False, is_fd=self.use_can_fd
+                )
+                self.canbus.send(msg)
 
-            # Wait for response with longer timeout
-            response = None
-            start_time = time.time()
-            while time.time() - start_time < 0.1:
-                response = self.canbus.recv(timeout=0.1)
-                if response and response.arbitration_id == recv_id:
-                    break
+                # Wait for response with longer timeout
                 response = None
+                start_time = time.time()
+                while time.time() - start_time < 0.1:
+                    response = self.canbus.recv(timeout=0.1)
+                    if response and response.arbitration_id == recv_id:
+                        break
+                    response = None
 
-            if response is None:
-                missing_motors.append(motor_name)
-            else:
-                self._process_response(motor_name, msg)
-            time.sleep(MEDIUM_TIMEOUT_SEC)
+                if response is None:
+                    missing_motors.append(motor_name)
+                else:
+                    self._process_response(motor_name, response)
+                time.sleep(MEDIUM_TIMEOUT_SEC)
+
+            if not missing_motors:
+                break
+            if attempt < max_attempts:
+                logger.warning(
+                    f"Handshake attempt {attempt}/{max_attempts}: no response from {missing_motors}, retrying..."
+                )
+                time.sleep(0.05)
 
         if missing_motors:
             raise ConnectionError(
-                f"Handshake failed. The following motors did not respond: {missing_motors}. "
-                "Check power (24V) and CAN wiring."
+                f"Handshake failed after {max_attempts} attempts. The following motors did not respond: "
+                f"{missing_motors}. Check power (24V) and CAN wiring."
             )
         logger.info("Handshake successful. All motors ready.")
 

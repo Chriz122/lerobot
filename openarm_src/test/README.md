@@ -127,10 +127,10 @@ export OPENARM_TABLE_Z=...                    # 桌面在 URDF 世界座標的�
 python check_cameras.py
 
 # 2) 示教 s*：程式會先開主從控制，用主臂把張開的夾爪擺到「閉合就能夾到方塊」的位置，按 Enter 後記錄
-python main_experiment.py --real --side left --port can1 --leader-port can2 --serial 353322271542 --mode teach
+python main_experiment.py --real --side left --port can1 --leader-port can2 --serial 353322271140 --mode teach
 
 # 3) 無接觸對準：先用純 IBVS，確認方向正確
-python main_experiment.py --real --side left --port can1 --serial <D405序號> --mode approach --method ibvs
+python main_experiment.py --real --side left --port can1 --serial 353322271140 --mode approach --method ibvs
 
 # 4) 加入殘差與守門（會先做微幅試探）
 python main_experiment.py --real --side left --port can1 --serial <D405序號> --mode approach

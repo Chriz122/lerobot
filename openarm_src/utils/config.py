@@ -127,6 +127,12 @@ DEFAULT_EVAL_TRIALS = int(os.environ.get("OPENARM_EVAL_TRIALS", "10"))
 DEFAULT_EVAL_DURATION_S = float(os.environ.get("OPENARM_EVAL_DURATION_S", "45.0"))
 DEFAULT_EVAL_LOG_FILE = os.environ.get("OPENARM_EVAL_LOG_FILE", "eval_results.csv")
 
+# 推論期間夾爪加強 (rollout_home.py) / Gripper grip boost during policy rollout
+# 夾爪 0° = 全閉、-65° = 全開；目標角度 × scale (<1) 會往閉合方向推、夾得更緊，但全開也會跟著變小。
+DEFAULT_GRIPPER_SCALE = float(os.environ.get("OPENARM_GRIPPER_SCALE", "1.0"))
+# 夾爪 MIT kp；夾緊力 ≈ kp × 擠壓角度 (rad)。None = 沿用 follower config (預設 25)。
+DEFAULT_GRIPPER_KP = float(os.environ["OPENARM_GRIPPER_KP"]) if os.environ.get("OPENARM_GRIPPER_KP") else None
+
 # WebRTC 實時串流與力矩監控
 DEFAULT_WEBRTC_ENABLE = os.environ.get("OPENARM_WEBRTC", "0") == "1"
 DEFAULT_WEBRTC_PORT = int(os.environ.get("OPENARM_WEBRTC_PORT", "8080"))
