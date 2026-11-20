@@ -18,6 +18,15 @@ eval_trials.py — OpenArm 實機成功率測試（多 checkpoint 交錯、可�
       -- \
       --robot.type=bi_openarm_follower ...（其餘 robot / cameras / task 參數，與 lerobot-rollout 相同）
 
+ACT 與 ACT+IBVS 夾取交錯比較（同一個模型用兩個名稱；--ibvs 列出的名稱改用 ibvs_assist 策略）：
+
+  python eval_trials.py \
+      --ckpts act=$HOME/models/.../pretrained_model act_ibvs=$HOME/models/.../pretrained_model \
+      --ibvs act_ibvs --trials 10 --blind --log eval_ibvs.csv \
+      -- --robot.type=bi_openarm_follower ...
+  （IBVS 需先為每支手臂執行 python -m openarm_src.grasp.bottle_teach --side left/right；
+    第一次可加 --ibvs-arg=--strategy.observe_only=true 只看何時會接手、不實際接手）
+
 只看統計結果：
   python eval_trials.py --summary --log eval_bottle_tray.csv
 """
@@ -127,9 +136,10 @@ def ask_result(n_objects):
     return {"success": "1" if r == "s" else "0", "failure_mode": mode, "placed": placed, "notes": notes}
 
 
-def run_trial(policy_path, duration, rollout_args):
+def run_trial(policy_path, duration, rollout_args, strategy="base", strategy_args=()):
     cmd = [sys.executable, "rollout_home.py",
-           "--strategy.type=base",
+           f"--strategy.type={strategy}",
+           *strategy_args,
            f"--policy.path={policy_path}",
            f"--duration={duration}",
            *rollout_args]
@@ -160,6 +170,9 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--log", default=DEFAULT_EVAL_LOG_FILE)
     ap.add_argument("--summary", action="store_true", help="只顯示統計")
+    ap.add_argument("--ibvs", nargs="*", default=[], help="這些 checkpoint 名稱改用 ibvs_assist（ACT + IBVS 夾取）")
+    ap.add_argument("--ibvs-arg", action="append", default=[],
+                    help="只傳給 ibvs 回合的參數，例如 --ibvs-arg=--strategy.observe_only=true（可重複）")
     a = ap.parse_args(argv)
 
     if a.summary:
@@ -169,6 +182,9 @@ def main():
         ap.error("需要 --ckpts 以及 -- 之後的 robot/cameras/task 參數")
 
     ckpts = dict(c.split("=", 1) for c in a.ckpts)
+    unknown = set(a.ibvs) - set(ckpts)
+    if unknown:
+        ap.error(f"--ibvs 的名稱不在 --ckpts 裡：{sorted(unknown)}")
     for name, p in ckpts.items():
         if not os.path.exists(os.path.join(os.path.expanduser(p), "model.safetensors")):
             sys.exit(f"找不到模型：{name} → {p}")
@@ -193,7 +209,10 @@ def main():
         name = queue[i]
         shown = "???" if a.blind else name
         print(f"\n{'#' * 64}\n# 回合 {i + 1}/{total}   checkpoint: {shown}\n{'#' * 64}")
-        rc, elapsed = run_trial(ckpts[name], a.duration, rollout_args)
+        if name in a.ibvs:
+            rc, elapsed = run_trial(ckpts[name], a.duration, rollout_args, "ibvs_assist", a.ibvs_arg)
+        else:
+            rc, elapsed = run_trial(ckpts[name], a.duration, rollout_args)
         if rc not in (0, None):
             print(f"\n(推論程式結束碼 {rc}，若是硬體/連線錯誤請選 x 作廢重做)")
         res = ask_result(a.n_objects)

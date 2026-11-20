@@ -162,6 +162,8 @@ def install_patches():
 
 def main():
     install_patches()
+    import openarm_src.grasp.ibvs_assist  # noqa: F401  註冊 --strategy.type=ibvs_assist（ACT + IBVS 夾取）
+
     ep = next(e for e in entry_points(group="console_scripts") if e.name == "lerobot-rollout")
     rollout_main = ep.load()
     sys.argv = ["lerobot-rollout"] + sys.argv[1:]
