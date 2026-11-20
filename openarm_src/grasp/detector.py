@@ -27,6 +27,7 @@ class Box:
     x1: float
     y1: float
     score: float
+    label: int = 0           # 符合第幾個查詢：0 = 指定的瓶子（例如 coca cola bottle），1 = 一般的 bottle
 
     @property
     def center(self) -> np.ndarray:
@@ -58,7 +59,7 @@ class _Pending:
 class BottleDetector:
     """同步介面：detect({cam: rgb}) -> {cam: [Box]}。"""
 
-    def __init__(self, queries: dict[str, str], threshold: float = 0.2, model_name: str = DEFAULT_MODEL,
+    def __init__(self, queries: dict[str, str | list[str]], threshold: float = 0.2, model_name: str = DEFAULT_MODEL,
                  device: str = "cuda"):
         import torch
         from transformers import Owlv2ForObjectDetection, Owlv2Processor
@@ -75,10 +76,14 @@ class BottleDetector:
             self.processor = Owlv2Processor.from_pretrained(model_name)
         self.model = Owlv2ForObjectDetection.from_pretrained(model_name, torch_dtype=self.dtype).to(device).eval()
 
+    def _query_list(self, name: str) -> list[str]:
+        q = self.queries[name]
+        return [q] if isinstance(q, str) else list(q)
+
     def detect(self, images: dict[str, np.ndarray]) -> dict[str, list[Box]]:
         torch = self.torch
         names = list(images)
-        texts = [[f"a photo of a {self.queries[n]}"] for n in names]
+        texts = [[f"a photo of a {q}" for q in self._query_list(n)] for n in names]
         try:
             inputs = self.processor(text=texts, images=[images[n] for n in names], return_tensors="pt",
                                     device=self.device)
@@ -95,12 +100,14 @@ class BottleDetector:
         for n, res in zip(names, results):
             h, w = images[n].shape[:2]
             items = []
-            for score, box in zip(res["scores"].float().tolist(), res["boxes"].float().tolist()):
+            labels = res.get("labels")
+            labels = labels.tolist() if labels is not None else [0] * len(res["scores"])
+            for score, box, label in zip(res["scores"].float().tolist(), res["boxes"].float().tolist(), labels):
                 x0, y0, x1, y1 = box
                 x0, x1 = np.clip([x0, x1], 0, w - 1)
                 y0, y1 = np.clip([y0, y1], 0, h - 1)
                 if x1 - x0 > 2 and y1 - y0 > 2:
-                    items.append(Box(x0, y0, x1, y1, score))
+                    items.append(Box(x0, y0, x1, y1, score, int(label)))
             boxes[n] = sorted(items, key=lambda b: -b.score)
         return boxes
 
@@ -123,7 +130,7 @@ def _detector_worker(conn, queries, threshold, model_name):
             return
         try:
             out = det.detect(msg)
-            conn.send(("ok", {n: [(b.x0, b.y0, b.x1, b.y1, b.score) for b in bs] for n, bs in out.items()}))
+            conn.send(("ok", {n: [(b.x0, b.y0, b.x1, b.y1, b.score, b.label) for b in bs] for n, bs in out.items()}))
         except Exception as e:  # noqa: BLE001
             conn.send(("error", repr(e)))
 

@@ -38,6 +38,21 @@ def home_q(model: ArmModel) -> np.ndarray:
     return model.deg_to_q([wp[f"{model.side}_joint_{i}.pos"] for i in range(1, 8)])
 
 
+def side_grasp_q(model: ArmModel) -> np.ndarray:
+    """與真機相同的側向夾取姿態：夾爪水平朝前、相機正立（瓶子在畫面中是直立的）。"""
+    q = home_q(model)
+    _, p_des = model.fk(q)
+    yaw = np.radians(-60.0)
+    a = np.array([np.cos(yaw), np.sin(yaw), 0.0])
+    x = -np.array([-np.sin(yaw), np.cos(yaw), 0.0])
+    r_des = np.column_stack([x, np.cross(a, x), a])
+    for _ in range(400):
+        r, p = model.fk(q)
+        twist = np.concatenate([0.5 * (r.T @ (p_des - p)), 0.5 * model.orientation_error(q, r_des)])
+        q = q + model.tcp_twist_to_dq(q, twist, damping=0.01)
+    return q
+
+
 def move_tcp(model, q, delta, n=50):
     for _ in range(n):
         q = q + model.tcp_translation_to_dq(q, delta / n, damping=1e-3)
@@ -89,7 +104,7 @@ def make_detection(model, q, p_world, fid, noise_px=0.0, rng=None):
 @pytest.fixture(scope="module")
 def setup():
     model = ArmModel("left")
-    q_grasp = home_q(model)
+    q_grasp = side_grasp_q(model)
     _, p_grasp = model.fk(q_grasp)                    # 瓶子的夾取點 = 示教時的 TCP 位置
     q_teach = move_tcp(model, q_grasp, -APPROACH * DESCENT)
     # 與 bottle_teach.py 相同：示教位置看到的（可能被裁切的）框中心 + 深度 -> TCP 座標的瓶子點
@@ -127,14 +142,14 @@ def run(servo, model, q, p_grasp, steps=900, rng=None, noise_px=0.0):
 @pytest.mark.parametrize("offset", [[0.04, 0.0, 0.0], [0.0, -0.02, 0.02], [-0.03, -0.03, 0.02]])
 def test_servo_grasps_bottle_from_offset_start(setup, offset):
     model, _, p_grasp, q_teach, target = setup
-    servo = ArmGraspServo("left", model, target, INTR, WH, ServoConfig())
+    servo = ArmGraspServo("left", model, target, INTR, WH, ServoConfig(center_u=False))
     q0 = move_tcp(model, q_teach, np.array(offset))   # 起點：示教位置再偏移
     q, grip, q_desc = run(servo, model, q0, p_grasp, rng=np.random.default_rng(0), noise_px=0.5)
     assert servo.phase == Phase.DONE, servo.status()
     r_desc, p_tcp = model.fk(q_desc)
     # 下降會照示教路徑走回夾取點，再沿同一方向多深入 extra_depth_m
     d = target.descent_vector / np.linalg.norm(target.descent_vector)
-    err = p_tcp - (p_grasp + r_desc @ d * ServoConfig().extra_depth_m)
+    err = p_tcp - (p_grasp + r_desc @ d * ServoConfig(center_u=False).extra_depth_m)
     assert np.linalg.norm(err) < 0.008, np.round(err * 1000, 1)
     assert grip == pytest.approx(0.0)
     _, p_end = model.fk(q)
@@ -143,14 +158,14 @@ def test_servo_grasps_bottle_from_offset_start(setup, offset):
 
 def test_servo_waits_until_bottle_is_close(setup):
     model, _, p_grasp, q_teach, target = setup
-    servo = ArmGraspServo("left", model, target, INTR, WH, ServoConfig(trigger_max_depth_m=0.05))
+    servo = ArmGraspServo("left", model, target, INTR, WH, ServoConfig(trigger_max_depth_m=0.05, center_u=False))
     run(servo, model, q_teach, p_grasp, steps=60)
     assert servo.phase == Phase.IDLE                    # 太遠不接手
 
 
 def test_observe_only_never_commands(setup):
     model, _, p_grasp, q_teach, target = setup
-    servo = ArmGraspServo("left", model, target, INTR, WH, ServoConfig(), observe_only=True)
+    servo = ArmGraspServo("left", model, target, INTR, WH, ServoConfig(center_u=False), observe_only=True)
     for k in range(30):
         assert servo.update(model.q_to_deg(q_teach), -20.0, make_detection(model, q_teach, p_grasp, k + 1),
                             1 / 30) is None
@@ -158,7 +173,7 @@ def test_observe_only_never_commands(setup):
 
 def test_aborts_and_hands_back_when_bottle_lost(setup):
     model, _, p_grasp, q_teach, target = setup
-    servo = ArmGraspServo("left", model, target, INTR, WH, ServoConfig(lost_timeout_s=0.0))
+    servo = ArmGraspServo("left", model, target, INTR, WH, ServoConfig(lost_timeout_s=0.0, center_u=False))
     q = move_tcp(model, q_teach, np.array([0.03, 0.0, 0.0]))
     for k in range(5):
         servo.update(model.q_to_deg(q), -20.0, make_detection(model, q, p_grasp, k + 1), 1 / 30)
@@ -186,7 +201,7 @@ def test_kabsch_recovers_handeye_rotation(setup):
 
 def test_no_trigger_when_bottle_out_of_view(setup):
     model, _, p_grasp, q_teach, target = setup
-    servo = ArmGraspServo("left", model, target, INTR, WH, ServoConfig())
+    servo = ArmGraspServo("left", model, target, INTR, WH, ServoConfig(center_u=False))
     q = move_tcp(model, q_teach, np.array([0.0, 0.3, 0.0]))      # 瓶子在畫面之外
     assert not make_detection(model, q, p_grasp, 1).boxes
     run(servo, model, q, p_grasp, steps=60)
@@ -196,7 +211,7 @@ def test_no_trigger_when_bottle_out_of_view(setup):
 def test_waits_for_arm_to_reach_before_closing(setup):
     """手臂落後命令時（重力、追蹤落後），要等追上才閉合夾爪。"""
     model, _, p_grasp, q_teach, target = setup
-    servo = ArmGraspServo("left", model, target, INTR, WH, ServoConfig(reach_timeout_s=5.0))
+    servo = ArmGraspServo("left", model, target, INTR, WH, ServoConfig(reach_timeout_s=5.0, center_u=False))
     q, grip, fid = q_teach.copy(), -20.0, 0
     lagging = True
     for k in range(2000):
@@ -225,7 +240,7 @@ def test_waits_for_arm_to_reach_before_closing(setup):
 def test_too_close_retreats_then_grasps(setup, back):
     """ACT 已經把夾爪帶到瓶子上（比示教距離還近）：接手後先後退，再伺服、下降、夾取。"""
     model, q_grasp, p_grasp, q_teach, target = setup
-    servo = ArmGraspServo("left", model, target, INTR, WH, ServoConfig())
+    servo = ArmGraspServo("left", model, target, INTR, WH, ServoConfig(center_u=False))
     phases = []
     q = move_tcp(model, q_grasp, -APPROACH * back)
     grip, fid, q_desc = -20.0, 0, None
@@ -247,5 +262,32 @@ def test_too_close_retreats_then_grasps(setup, back):
     assert servo.phase == Phase.DONE, (servo.status(), phases)
     r_desc, p_tcp = model.fk(q_desc)
     d = target.descent_vector / np.linalg.norm(target.descent_vector)
-    err = p_tcp - (p_grasp + r_desc @ d * ServoConfig().extra_depth_m)
+    err = p_tcp - (p_grasp + r_desc @ d * ServoConfig(center_u=False).extra_depth_m)
     assert np.linalg.norm(err) < 0.008, np.round(err * 1000, 1)
+
+
+def test_center_u_aligns_bottle_to_image_center(setup):
+    """預設 center_u：對準完成時瓶子框中心在畫面水平中央（兩指正中間）。"""
+    model, _, p_grasp, q_teach, target = setup
+    servo = ArmGraspServo("left", model, target, INTR, WH, ServoConfig())
+    assert servo.u_star == pytest.approx(INTR.cx)
+    # 把瓶子放到示教位置看起來「偏右 25 px」的地方（真機示教 u*=188 與畫面中心 212 也差約 25 px）
+    r_t, _ = model.fk(q_teach)
+    cam_x_w = (r_t @ CAM_R)[:, 0]
+    u_now = make_detection(model, q_teach, p_grasp, 0).boxes[0].center[0]
+    z = camera_point(model, q_teach, p_grasp)[2]
+    p_grasp = p_grasp + cam_x_w * ((INTR.cx + 25.0) - u_now) / INTR.fx * z
+    q, fid = move_tcp(model, q_teach, np.array([0.02, 0.0, 0.0])), 0
+    for k in range(900):
+        det = None
+        if k % 2 == 0:
+            fid += 1
+            det = make_detection(model, q, p_grasp, fid)
+        cmd = servo.update(model.q_to_deg(q), -20.0, det, 1 / 30)
+        if cmd is not None:
+            q = model.deg_to_q([cmd[f"left_joint_{i}.pos"] for i in range(1, 8)])
+        if servo.phase == Phase.DESCEND:
+            break
+    assert servo.phase == Phase.DESCEND, servo.status()
+    box = make_detection(model, q, p_grasp, 0).boxes[0]
+    assert abs(box.center[0] - INTR.cx) < 3.0, box.center

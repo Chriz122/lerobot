@@ -50,11 +50,11 @@ class ServoConfig:
     retreat_speed_m_s: float = 0.03
     retreat_max_m: float = 0.12                # 後退最多這麼遠（量不到深度時的上限）
     retreat_up_deg: float = 35.0               # 後退方向：夾爪水平方向往後，再往上抬這個角度（基座座標）
-    retreat_min_depth_m: float = 0.10          # 「看得到瓶子」需要的深度（D405 最近約 7 cm，留餘裕）
+    retreat_min_depth_m: float = 0.07          # 看得到瓶子且深度 >= 這個值就停止後退（D405 最近約 7 cm）
     retreat_seen_frames: int = 2               # 連續幾次看得到瓶子就停止後退、開始伺服
     trigger_max_error_m: float = 0.08          # 接手當下誤差超過這麼大就不接手（多半是太近、框被切到，量測不可信）
     trigger_max_px_from_target: float = 120.0  # 觸發時框中心離 s* 最多幾 px（避免選到別支手臂的瓶子）
-    track_score: float = 0.15
+    track_score: float = 0.10                  # 追蹤（有位置門檻）時的分數門檻；近距離看不到標籤時分數常只有 0.1 多
     track_gate_frac: float = 0.15              # 追蹤時新框中心離上一個最多 畫面寬 * frac（避免跳到另一個瓶子）
     gain: float = 1.5                          # 1/s
     max_speed_m_s: float = 0.04
@@ -74,6 +74,7 @@ class ServoConfig:
     gripper_closed_deg: float = 0.0
     gripper_speed_deg_s: float = 60.0
     close_hold_s: float = 1.0
+    center_u: bool = True                      # 水平目標用畫面中心（相機在兩指中間上方）；False = 用示教時的 u
 
 
 @dataclass
@@ -150,6 +151,8 @@ class ArmGraspServo:
         # 示教與執行時解析度不同：s* 依比例換算
         sx, sy = image_wh[0] / target.image_wh[0], image_wh[1] / target.image_wh[1]
         self.u_star, self.v_star = target.u * sx, target.v * sy
+        if cfg.center_u:
+            self.u_star = intr.cx              # 瓶子水平置中 = 在兩指正中間
         self._q_obs: np.ndarray | None = None
         self.image_w, self.image_h = image_wh
         self.phase = Phase.IDLE
@@ -197,8 +200,12 @@ class ArmGraspServo:
                     return None
                 self._enter(nxt, now, obs_deg, grip_deg)
                 if nxt == Phase.RETREAT:
-                    logger.info("[IBVS] %s 看到瓶子但太近（%.1f cm），接手後先後退到 %.1f cm", self.side,
-                                self._trigger_depth * 100, self.target.depth_m * 100)
+                    r_t, _ = self.model.fk(self._q_cmd)
+                    d_w = r_t @ self._retreat_direction_tcp()
+                    logger.info("[IBVS] %s 看到瓶子但太近（%.1f cm），深度 < %.0f cm 或看不到瓶子時往後上方斜退｜"
+                                "方向（基座）%s，仰角 %.0f°",
+                                self.side, self._trigger_depth * 100, self.cfg.retreat_min_depth_m * 100,
+                                np.round(d_w, 2).tolist(), np.degrees(np.arcsin(np.clip(d_w[2], -1, 1))))
                 else:
                     logger.info("[IBVS] %s 看到瓶子，接手伺服", self.side)
             return None
@@ -263,10 +270,11 @@ class ArmGraspServo:
         self.reason = reason
         logger.warning("[IBVS] %s 中止：%s，交回 ACT", self.side, reason)
 
-    def _candidates(self, det: Detection, min_score: float) -> list[tuple[Box, float]]:
+    def _candidates(self, det: Detection, min_score: float, specific_only: bool = False) -> list[tuple[Box, float]]:
+        """有深度的框。specific_only：只要符合「指定瓶子」查詢的框（觸發時用，避免選到別支手臂的瓶子）。"""
         out = []
         for b in det.boxes:
-            if b.score < min_score:
+            if b.score < min_score or (specific_only and b.label != 0):
                 continue
             z = box_depth_m(det, b)
             if z is not None:
@@ -281,12 +289,24 @@ class ArmGraspServo:
         return EDGE_PX < c[0] < self.image_w - 1 - EDGE_PX and EDGE_PX < c[1] < self.image_h - 1 - EDGE_PX
 
     def position_error(self, c: np.ndarray, z: float, q: np.ndarray) -> np.ndarray:
-        """TCP 要移動的量（基座座標，m）：水平由影像、高度由示教的 TCP 高度。"""
+        """TCP 要移動的量（基座座標，m），只用框中心的 u 與深度 Z：
+
+        - 左右：瓶子水平置中到 u*（u 誤差換成公尺，沿相機 x 軸的水平方向移動）
+        - 前後：深度到 Z*（沿夾爪接近方向的水平分量移動）
+        - 高度：維持示教時的 TCP 高度（運動學）
+        不用框的 v（近距離時瓶子一定被畫面上下切到），也不需要手眼傾斜角（相機 x 軸不受傾斜影響）。
+        """
         r_t, p_t = self.model.fk(q)
-        b_tcp = bottle_in_tcp(self.intr, self.target.r_tcp_cam, self.target.cam_p_tcp, c[0], c[1], z)
-        e = r_t @ (b_tcp - self.target.bottle_tcp)
-        e[2] = self.target.tcp_z - p_t[2]
-        return e
+        up = np.array([0.0, 0.0, 1.0])
+        x_w = r_t @ self.target.r_tcp_cam[:, 0]                 # 相機 x 軸（影像往右）在基座座標
+        x_h = x_w - (x_w @ up) * up
+        a_w = r_t @ (self.target.descent_vector / np.linalg.norm(self.target.descent_vector))
+        a_h = a_w - (a_w @ up) * up
+        x_h = x_h / max(np.linalg.norm(x_h), 1e-6)
+        a_h = a_h / max(np.linalg.norm(a_h), 1e-6)
+        lateral = (c[0] - self.u_star) / self.intr.fx * z     # 瓶子偏右 -> 正值 -> 往右移
+        forward = z - self.target.depth_m                       # 瓶子比示教遠 -> 正值 -> 往前移
+        return lateral * x_h + forward * a_h + (self.target.tcp_z - p_t[2]) * up
 
     def _check_trigger(self, det: Detection) -> Phase | None:
         """回傳要進入的階段：SERVO（距離正常）、RETREAT（太近，先後退），或 None（不接手）。"""
@@ -294,7 +314,7 @@ class ArmGraspServo:
         star = np.array([self.u_star, self.v_star])
         z_min = self.target.depth_m - cfg.trigger_min_margin_m
         ok, close, reasons = [], [], []
-        for b, z in self._candidates(det, cfg.trigger_score):
+        for b, z in self._candidates(det, cfg.trigger_score, specific_only=True):
             px = float(np.linalg.norm(self._feature(b) - star))
             if z > cfg.trigger_max_depth_m:
                 reasons.append(f"太遠 {z * 100:.0f}cm")
@@ -341,7 +361,9 @@ class ArmGraspServo:
         return r_t.T @ d_w
 
     def _retreat_step(self, det: Detection | None, now: float, dt: float) -> None:
-        """太近時：張開夾爪、往後上方退，連續看得到瓶子（深度可量）就停，交給伺服；最多退 retreat_max_m。"""
+        """太近時：張開夾爪；只有看不到瓶子、或深度 < retreat_min_depth_m 時才往後上方斜退，
+        連續 retreat_seen_frames 次看得到（深度 >= retreat_min_depth_m）就交給伺服；最多退 retreat_max_m。
+        """
         cfg = self.cfg
         self._open_gripper(dt)
         if det is not None:
@@ -350,7 +372,10 @@ class ArmGraspServo:
                                "n_boxes": len(det.boxes),
                                "best_score": round(max((b.score for b in det.boxes), default=0.0), 3),
                                "retreat_m": round(self._moved, 4),
-                               "depths": ";".join(f"{z:.3f}" for _, z in cands)})
+                               "depths": ";".join(f"{z:.3f}" for _, z in cands),
+                               **dict(zip(("tcp_x", "tcp_y", "tcp_z"),
+                                          np.round(self.model.fk(self._q_obs if self._q_obs is not None
+                                                                 else self._q_cmd)[1], 4).tolist()))})
             seen = [(self._feature(b), z) for b, z in cands
                     if z >= cfg.retreat_min_depth_m and self._center_inside(b)]
             if seen:

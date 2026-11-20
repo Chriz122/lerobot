@@ -40,7 +40,7 @@ class IbvsAssistStrategyConfig(RolloutStrategyConfig):
     teach_dir: str = GRASP_DIR
     observe_only: bool = False          # 只偵測、印出何時會接手，不覆寫任何命令（第一次上機先用這個）
     detector_model: str = "google/owlv2-base-patch16-ensemble"
-    detector_threshold: float = 0.15
+    detector_threshold: float = 0.10
     detector_hz: float = 30.0           # 偵測頻率上限；實際受推論時間限制（1 台相機約 28 Hz、2 台約 19 Hz）
     idle_detect_every: int = 3          # 有手臂在接手時，其他閒置手臂的相機每幾拍才送一次偵測（讓接手的手臂偵測更快）
     trigger_score: float = 0.25
@@ -50,8 +50,10 @@ class IbvsAssistStrategyConfig(RolloutStrategyConfig):
     gain: float = 1.5
     max_speed_m_s: float = 0.04
     lift_m: float = 0.06
+    center_u: bool = True               # 瓶子水平置中到畫面中心；false = 對準示教時瓶子所在的 u
     extra_depth_m: float = 0.015        # 比示教位置再往前深入多少才閉合（夾太淺會滑掉）
     retreat_up_deg: float = 35.0        # 太近時往後上方退的仰角
+    retreat_min_depth_m: float = 0.07   # 太近時：深度 < 這個值或看不到瓶子才繼續後退
     trigger_max_px: float = 120.0       # 觸發時瓶子框中心離 s* 最多幾 px（畫面裡有別支手臂的瓶子時很重要）
     query_left: str = ""                # 左臂要找的瓶子（空白 = 用示教檔的 query），例如 "coca cola bottle"
     query_right: str = ""               # 右臂要找的瓶子，例如 "blue bottle"
@@ -92,12 +94,14 @@ class IbvsAssistStrategy(BaseStrategy):
                                     max_speed_m_s=cfg.max_speed_m_s, lift_m=cfg.lift_m,
                                     extra_depth_m=cfg.extra_depth_m,
                                     trigger_max_px_from_target=cfg.trigger_max_px,
-                                    retreat_up_deg=cfg.retreat_up_deg)
+                                    retreat_up_deg=cfg.retreat_up_deg, center_u=cfg.center_u,
+                                    retreat_min_depth_m=cfg.retreat_min_depth_m)
             self._servos[side] = ArmGraspServo(side, ArmModel(side), target, intr, (cam.width, cam.height),
                                                servo_cfg, observe_only=cfg.observe_only)
             self._cams[side] = (cam_name, cam)
             self._depth_scale[side] = scale
-            queries[cam_name] = target.query
+            # 觸發用指定的瓶子；追蹤時也接受一般的 bottle（近距離看不到標籤時，指定查詢常常認不出來）
+            queries[cam_name] = [target.query] if target.query.strip() == "bottle" else [target.query, "bottle"]
             logger.info("[IBVS] %s 手臂啟用：查詢「%s」，s*=(%.0f, %.0f) px、%.1f cm", side, target.query,
                         target.u, target.v, target.depth_m * 100)
         self._detector = AsyncDetector(queries, cfg.detector_threshold, cfg.detector_model, cfg.detector_hz) \
