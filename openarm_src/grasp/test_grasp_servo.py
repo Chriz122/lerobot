@@ -115,7 +115,7 @@ def setup():
     descent = float((r_g.T @ (p_grasp - model.fk(q_teach)[1])) @ APPROACH)
     target = TaughtTarget(u, v, z, WH, CAM_R, descent, APPROACH, "bottle",
                           bottle_in_tcp(INTR, CAM_R, CAM_P, u, v, z), CAM_P, float(model.fk(q_teach)[1][2]),
-                          model.fk(q_teach)[0].T @ (p_grasp - model.fk(q_teach)[1]), model.q_to_deg(q_teach))
+                          model.fk(q_teach)[0].T @ (p_grasp - model.fk(q_teach)[1]))
     return model, q_grasp, p_grasp, q_teach, target
 
 
@@ -291,69 +291,3 @@ def test_center_u_aligns_bottle_to_image_center(setup):
     assert servo.phase == Phase.DESCEND, servo.status()
     box = make_detection(model, q, p_grasp, 0).boxes[0]
     assert abs(box.center[0] - INTR.cx) < 3.0, box.center
-
-
-def _rotate_in_place(model, q, axis_w, deg):
-    """TCP 位置不動，姿態繞基座座標軸 axis_w 轉 deg（模擬 ACT 交出的姿態和示教不同）。"""
-    from openarm_src.grasp.kinematics import rot_axis
-
-    r0, p0 = model.fk(q)
-    r_des = rot_axis(axis_w / np.linalg.norm(axis_w), np.radians(deg)) @ r0
-    for _ in range(600):
-        r, p = model.fk(q)
-        twist = np.concatenate([0.5 * (r.T @ (p0 - p)), 0.5 * model.orientation_error(q, r_des)])
-        q = q + model.tcp_twist_to_dq(q, twist, damping=0.01)
-    return q
-
-
-def _grasp_offset(model, q_close, p_grasp):
-    """夾爪閉合時，瓶軸相對指尖的（側向、高度）誤差 (m)。"""
-    r, p = model.fk(q_close)
-    a = r @ APPROACH
-    a_h = a[:2] / np.linalg.norm(a[:2])
-    d = p_grasp - p
-    return a_h[0] * d[1] - a_h[1] * d[0], d[2]
-
-
-def _run_until_close(model, target, q, p_grasp, cfg):
-    servo = ArmGraspServo("left", model, target, INTR, WH, cfg)
-    fid, q_close = 0, None
-    for k in range(1500):
-        det = None
-        if k % 2 == 0:
-            fid += 1
-            det = make_detection(model, q, p_grasp, fid)
-        cmd = servo.update(model.q_to_deg(q), -20.0, det, 1 / 30)
-        if cmd is not None:
-            q = model.deg_to_q([cmd[f"left_joint_{i}.pos"] for i in range(1, 8)])
-        if servo.phase == Phase.CLOSE and q_close is None:
-            q_close = q.copy()
-        if servo.phase in (Phase.LIFT, Phase.DONE, Phase.ABORTED):
-            break
-    return servo, q_close
-
-
-@pytest.mark.parametrize("axis,deg", [("roll", 10.0), ("roll", -10.0), ("pitch", 8.0), ("yaw", 15.0)])
-def test_handoff_orientation_differs_from_teach(setup, axis, deg):
-    """ACT 交出的姿態和示教不同：伺服時把 pitch / roll 轉回示教姿態，夾取點和「從示教姿態接手」幾乎一樣。
-
-    不修正時（放寬 joint 6 限位的模擬）：roll 偏 8–15° 側向偏 1–2.5 cm（相機在夾爪上方往下傾，roll 把相機甩到側邊）、
-    pitch 偏 8° 高度偏約 1.6 cm；yaw 偏 15° 只差 2 mm（繞垂直軸對稱）。
-    與基準比較，是因為這個模擬姿態 joint 6 貼著限位，下降時本來就有幾 mm 誤差。
-    """
-    model, _, p_grasp, q_teach, target = setup
-    cfg = ServoConfig(center_u=False)
-    _, q_close0 = _run_until_close(model, target, q_teach.copy(), p_grasp, cfg)
-    lat0, h0 = _grasp_offset(model, q_close0, p_grasp)
-
-    r_t, _ = model.fk(q_teach)
-    a_w = r_t @ APPROACH
-    axes = {"roll": a_w, "pitch": np.cross([0.0, 0.0, 1.0], a_w), "yaw": np.array([0.0, 0.0, 1.0])}
-    q = _rotate_in_place(model, q_teach, axes[axis], deg)
-    servo, q_close = _run_until_close(model, target, q, p_grasp, cfg)
-    assert q_close is not None, servo.status()
-    lat, h = _grasp_offset(model, q_close, p_grasp)
-    assert abs(lat - lat0) < 0.003 and abs(h - h0) < 0.003,         (round((lat - lat0) * 1000, 1), round((h - h0) * 1000, 1))
-    if axis != "yaw":   # yaw 維持接手當下，不轉回示教
-        r_c, _ = model.fk(q_close)
-        assert rotation_angle_deg(r_c.T @ servo._goal_orientation()) < 3.0
