@@ -52,6 +52,7 @@ class IbvsAssistStrategyConfig(RolloutStrategyConfig):
     lift_m: float = 0.06
     center_u: bool = True               # 瓶子水平置中到畫面中心；false = 對準示教時瓶子所在的 u
     extra_depth_m: float = 0.015        # 比示教位置再往前深入多少才閉合（夾太淺會滑掉）
+    align_orientation: bool = True      # 伺服時把夾爪 pitch / roll 轉回示教姿態（yaw 維持接手當下）
     retreat_up_deg: float = 35.0        # 太近時往後上方退的仰角
     retreat_min_depth_m: float = 0.07   # 太近時：深度 < 這個值或看不到瓶子才繼續後退
     trigger_max_px: float = 120.0       # 觸發時瓶子框中心離 s* 最多幾 px（畫面裡有別支手臂的瓶子時很重要）
@@ -95,7 +96,8 @@ class IbvsAssistStrategy(BaseStrategy):
                                     extra_depth_m=cfg.extra_depth_m,
                                     trigger_max_px_from_target=cfg.trigger_max_px,
                                     retreat_up_deg=cfg.retreat_up_deg, center_u=cfg.center_u,
-                                    retreat_min_depth_m=cfg.retreat_min_depth_m)
+                                    retreat_min_depth_m=cfg.retreat_min_depth_m,
+                                    align_orientation=cfg.align_orientation)
             self._servos[side] = ArmGraspServo(side, ArmModel(side), target, intr, (cam.width, cam.height),
                                                servo_cfg, observe_only=cfg.observe_only)
             self._cams[side] = (cam_name, cam)

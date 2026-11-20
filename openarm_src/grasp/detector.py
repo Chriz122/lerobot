@@ -56,6 +56,60 @@ class _Pending:
     depth_m: np.ndarray | None
 
 
+def _area(b: Box) -> float:
+    return max(b.x1 - b.x0, 0.0) * max(b.y1 - b.y0, 0.0)
+
+
+def _inter(a: Box, b: Box) -> float:
+    w = min(a.x1, b.x1) - max(a.x0, b.x0)
+    h = min(a.y1, b.y1) - max(a.y0, b.y0)
+    return max(w, 0.0) * max(h, 0.0)
+
+
+def merge_duplicate_boxes(boxes: list[Box], iou_thr: float = 0.5, contain_thr: float = 0.8,
+                          keep_larger_min_ratio: float = 0.5) -> list[Box]:
+    """合併同一支瓶子的重複框（OWLv2 的後處理沒有 NMS，不分查詢類別）。
+
+    - 兩框 IoU > iou_thr：保留分數高的。
+    - 小框有 contain_thr 以上落在大框裡（例如只框到標籤、瓶蓋）：保留大框，
+      除非大框分數不到小框的 keep_larger_min_ratio 倍（大框多半是誤框，例如框到兩支瓶子）。
+    - 被合併掉的框若符合指定查詢（label 0），保留下來的框也標成 label 0：同一支瓶子有一部分被認出是指定的瓶子。
+    先丟掉「同時包住兩個左右分開的框」的大框（框到並排的兩支瓶子），以免把兩支瓶子併成一個。
+    只看左右：瓶子是直立的，同一支瓶子的局部框（瓶蓋、標籤）是上下排，並排的兩支瓶子才會左右分開。
+    回傳依分數由高到低排序。
+    """
+    def contains(big: Box, small: Box) -> bool:
+        return _area(small) < _area(big) and _inter(big, small) > contain_thr * _area(small)
+
+    def group_box(g: Box) -> bool:
+        inner = [b for b in boxes if b is not g and contains(g, b)]
+        return any(min(p.x1, q.x1) <= max(p.x0, q.x0) for i, p in enumerate(inner) for q in inner[i + 1:])
+
+    kept: list[Box] = []
+    for b in sorted((b for b in boxes if not group_box(b)), key=lambda x: -x.score):
+        merged = False
+        for i, k in enumerate(kept):
+            inter = _inter(b, k)
+            if inter <= 0.0:
+                continue
+            a_b, a_k = _area(b), _area(k)
+            iou = inter / max(a_b + a_k - inter, 1e-9)
+            contain = inter / max(min(a_b, a_k), 1e-9)
+            if iou <= iou_thr and contain <= contain_thr:
+                continue
+            # k 的分數 >= b。IoU 重疊或 k 較大：留 k；b 較大（k 是被包住的局部框）且分數不太低：換成 b
+            winner = k
+            if iou <= iou_thr and a_b > a_k and b.score >= keep_larger_min_ratio * k.score:
+                winner = Box(b.x0, b.y0, b.x1, b.y1, k.score, b.label)
+            label = min(winner.label, b.label, k.label)
+            kept[i] = Box(winner.x0, winner.y0, winner.x1, winner.y1, winner.score, label)
+            merged = True
+            break
+        if not merged:
+            kept.append(b)
+    return sorted(kept, key=lambda x: -x.score)
+
+
 class BottleDetector:
     """同步介面：detect({cam: rgb}) -> {cam: [Box]}。"""
 
@@ -108,7 +162,7 @@ class BottleDetector:
                 y0, y1 = np.clip([y0, y1], 0, h - 1)
                 if x1 - x0 > 2 and y1 - y0 > 2:
                     items.append(Box(x0, y0, x1, y1, score, int(label)))
-            boxes[n] = sorted(items, key=lambda b: -b.score)
+            boxes[n] = merge_duplicate_boxes(items)
         return boxes
 
 

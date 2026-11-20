@@ -11,6 +11,7 @@
       （瓶子都站在同一張桌上，示教時的 TCP 高度就是正確的夾取高度）。TCP 速度 v = k e。
   - 直立瓶子在近距離幾乎一定超出畫面，框被切到時中心會沿瓶身軸線偏移，所以高度不靠影像。
   - 收斂時高度與水平相對位置都和示教相同，視角相同、裁切相同，偏差抵銷。
+姿態：伺服時 pitch / roll 慢慢轉回示教姿態，yaw 維持接手當下（桌面、直立瓶子、重力繞垂直軸對稱，yaw 不影響夾取）。
 """
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .detector import Box, Detection, box_depth_m
-from .kinematics import ARM_JOINTS, ArmModel
+from .kinematics import ARM_JOINTS, ArmModel, rot_axis, rotation_angle_deg
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,11 @@ class ServoConfig:
     gripper_speed_deg_s: float = 60.0
     close_hold_s: float = 1.0
     center_u: bool = True                      # 水平目標用畫面中心（相機在兩指中間上方）；False = 用示教時的 u
+    # 伺服時把夾爪 pitch / roll 轉回示教姿態（yaw 維持接手當下）。ACT 交出的姿態 roll 偏 8–15° 時，
+    # 只平移會讓夾爪中線偏離瓶軸 1–2.5 cm；pitch 偏會讓下降路徑高度偏掉。需要示教檔有 q_teach_deg。
+    align_orientation: bool = True
+    orient_speed_deg_s: float = 20.0
+    orient_tol_deg: float = 2.0                # 姿態離目標超過這麼多就不下降
 
 
 @dataclass
@@ -92,6 +98,7 @@ class TaughtTarget:
     cam_p_tcp: np.ndarray        # 相機在 TCP 座標的位置（名義值；示教與執行用同一個，誤差大多抵銷）
     tcp_z: float                 # 示教位置 TCP 在基座座標的高度 (m)
     descent_tcp: np.ndarray | None = None   # 示教位置 -> 夾取位姿的實際位移（示教位置的 TCP 座標）；None 則沿接近軸
+    q_teach_deg: np.ndarray | None = None   # 示教位置的關節角 (LeRobot deg)：伺服時把 pitch / roll 轉回這個姿態
 
     @property
     def descent_vector(self) -> np.ndarray:
@@ -106,14 +113,17 @@ class TaughtTarget:
                             np.array(d.get("approach_tcp", [0.0, 0.0, 1.0]), dtype=float), d.get("query", "bottle"),
                             np.array(d["bottle_tcp"], dtype=float), np.array(d["cam_p_tcp"], dtype=float),
                             float(d["tcp_z"]),
-                            np.array(d["descent_tcp"], dtype=float) if "descent_tcp" in d else None)
+                            np.array(d["descent_tcp"], dtype=float) if "descent_tcp" in d else None,
+                            np.array(d["q_teach_deg"], dtype=float) if "q_teach_deg" in d else None)
 
     def save(self, path: str, extra: dict | None = None) -> None:
         d = {"u": self.u, "v": self.v, "depth_m": self.depth_m, "image_wh": list(self.image_wh),
              "r_tcp_cam": self.r_tcp_cam.tolist(), "descent_m": self.descent_m,
              "approach_tcp": self.approach_tcp.tolist(), "query": self.query,
              "bottle_tcp": self.bottle_tcp.tolist(), "cam_p_tcp": self.cam_p_tcp.tolist(), "tcp_z": self.tcp_z,
-             **({"descent_tcp": self.descent_tcp.tolist()} if self.descent_tcp is not None else {}), **(extra or {})}
+             **({"descent_tcp": self.descent_tcp.tolist()} if self.descent_tcp is not None else {}),
+             **({"q_teach_deg": np.asarray(self.q_teach_deg).tolist()} if self.q_teach_deg is not None else {}),
+             **(extra or {})}
         with open(path, "w", encoding="utf-8") as f:
             json.dump(d, f, indent=2, ensure_ascii=False)
 
@@ -154,6 +164,11 @@ class ArmGraspServo:
         if cfg.center_u:
             self.u_star = intr.cx              # 瓶子水平置中 = 在兩指正中間
         self._q_obs: np.ndarray | None = None
+        self._r_teach = (model.fk(model.deg_to_q(target.q_teach_deg))[0]
+                         if cfg.align_orientation and target.q_teach_deg is not None else None)
+        if cfg.align_orientation and self._r_teach is None:
+            logger.warning("[IBVS] %s 示教檔沒有 q_teach_deg：不修正夾爪姿態（重新示教即可）", side)
+        self._r_goal: np.ndarray | None = None
         self.image_w, self.image_h = image_wh
         self.phase = Phase.IDLE
         self.reason = ""
@@ -264,6 +279,34 @@ class ArmGraspServo:
             self._last_good_t = now
             self._settled = 0
             self._v_tcp[:] = 0.0
+        if phase == Phase.SERVO and self._r_teach is not None:
+            self._r_goal = self._goal_orientation()
+            logger.info("[IBVS] %s 伺服時把夾爪 pitch / roll 轉回示教姿態（差 %.1f°）", self.side,
+                        rotation_angle_deg(self._r_ref.T @ self._r_goal))
+
+    def _goal_orientation(self) -> np.ndarray:
+        """示教姿態繞基座垂直軸轉到「目前的 yaw」：pitch / roll 同示教，yaw 不動（少轉、少跑出畫面）。"""
+        a_tcp = self.target.descent_vector / np.linalg.norm(self.target.descent_vector)
+        a_now, a_teach = self._r_ref @ a_tcp, self._r_teach @ a_tcp
+        if np.hypot(*a_now[:2]) < 0.2 or np.hypot(*a_teach[:2]) < 0.2:   # 夾爪幾乎垂直：yaw 改用 TCP x 軸
+            a_now, a_teach = self._r_ref[:, 0], self._r_teach[:, 0]
+        dyaw = np.arctan2(a_now[1], a_now[0]) - np.arctan2(a_teach[1], a_teach[0])
+        return rot_axis(np.array([0.0, 0.0, 1.0]), dyaw) @ self._r_teach
+
+    def _orient_step(self, dt: float) -> float:
+        """參考姿態以 orient_speed_deg_s 轉向目標；回傳實際姿態離目標幾度。"""
+        if self._r_goal is None:
+            return 0.0
+        rel = self._r_ref.T @ self._r_goal
+        ang = np.radians(rotation_angle_deg(rel))
+        if ang > 1e-6:
+            w = np.array([rel[2, 1] - rel[1, 2], rel[0, 2] - rel[2, 0], rel[1, 0] - rel[0, 1]])
+            if np.linalg.norm(w) > 1e-9:
+                step = min(np.radians(self.cfg.orient_speed_deg_s) * dt, ang)
+                self._r_ref = self._r_ref @ rot_axis(w / np.linalg.norm(w), step)
+            else:                                              # 剛好差 180°：直接設成目標
+                self._r_ref = self._r_goal.copy()
+        return rotation_angle_deg(self.model.fk(self._q_cmd)[0].T @ self._r_goal)
 
     def _abort(self, reason: str) -> None:
         self.phase = Phase.ABORTED
@@ -405,6 +448,7 @@ class ArmGraspServo:
         if now - self._phase_t0 > cfg.servo_timeout_s:
             return self._abort(f"{cfg.servo_timeout_s:.0f} 秒內未收斂")
         self._open_gripper(dt)
+        orient_err = self._orient_step(dt)
         if det is not None:
             gate = cfg.track_gate_frac * self.image_w
             scored = [b for b in det.boxes if b.score >= cfg.track_score]
@@ -432,9 +476,11 @@ class ArmGraspServo:
                            ex=round(float(err[0]), 4), ey=round(float(err[1]), 4), ez=round(float(err[2]), 4))
                 if now - self._last_log >= 0.5:
                     self._last_log = now
-                    logger.info("[IBVS] %s 伺服：框 (%.0f, %.0f) 深度 %.1f cm｜水平誤差 %.0f mm、高度誤差 %+.0f mm",
-                                self.side, c[0], c[1], z * 100, np.hypot(err[0], err[1]) * 1000, err[2] * 1000)
-                if self._last_err < cfg.tol_m:
+                    logger.info("[IBVS] %s 伺服：框 (%.0f, %.0f) 深度 %.1f cm｜水平誤差 %.0f mm、高度誤差 %+.0f mm、"
+                                "姿態差 %.1f°", self.side, c[0], c[1], z * 100, np.hypot(err[0], err[1]) * 1000,
+                                err[2] * 1000, orient_err)
+                rec["orient_err_deg"] = round(orient_err, 2)
+                if self._last_err < cfg.tol_m and orient_err <= cfg.orient_tol_deg:
                     self._settled += 1
                     if self._settled >= cfg.settle_detections:
                         self._v_tcp[:] = 0.0
@@ -458,7 +504,7 @@ class ArmGraspServo:
             return self._abort("瓶子跟丟")
         if now - self._v_tcp_t > cfg.hold_if_stale_s:
             self._v_tcp[:] = 0.0
-        if np.any(self._v_tcp):
+        if np.any(self._v_tcp) or orient_err > 0.1:      # 還在轉姿態時，沒有平移也要送命令
             self._step_tcp(self._v_tcp * dt)
 
     def _move_tcp(self, direction_tcp: np.ndarray, speed: float, distance: float, dt: float,
