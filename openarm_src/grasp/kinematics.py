@@ -76,6 +76,7 @@ class ArmModel:
         self.model = pin.buildModelFromUrdf(os.path.expanduser(urdf_path))
         self.data = self.model.createData()
         jids = [self.model.getJointId(f"openarm_{side}_joint{i}") for i in range(1, 8)]
+        self.jids = jids
         self.q_idx = [self.model.idx_qs[j] for j in jids]
         self.v_idx = [self.model.idx_vs[j] for j in jids]
         self.fid = self.model.getFrameId(f"openarm_{side}_hand_tcp")
@@ -101,6 +102,11 @@ class ArmModel:
         self.pin.framesForwardKinematics(self.model, self.data, self._full_q(q))
         m = self.data.oMf[self.fid]
         return np.array(m.rotation), np.array(m.translation)
+
+    def shoulder_position(self) -> np.ndarray:
+        """joint1 原點在基座座標的位置（與關節角無關），yaw 目標的參考點。"""
+        self.pin.framesForwardKinematics(self.model, self.data, self._full_q(np.zeros(len(self.q_idx))))
+        return np.array(self.data.oMi[self.jids[0]].translation)
 
     def jacobian_local(self, q: np.ndarray) -> np.ndarray:
         jac = self.pin.computeFrameJacobian(self.model, self.data, self._full_q(q), self.fid,

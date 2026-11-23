@@ -57,6 +57,10 @@ class IbvsAssistStrategyConfig(RolloutStrategyConfig):
     trigger_max_px: float = 120.0       # 觸發時瓶子框中心離 s* 最多幾 px（畫面裡有別支手臂的瓶子時很重要）
     query_left: str = ""                # 左臂要找的瓶子（空白 = 用示教檔的 query），例如 "coca cola bottle"
     query_right: str = ""               # 右臂要找的瓶子，例如 "blue bottle"
+    orient_axes: str = "roll,pitch,yaw"  # 伺服時修正哪些姿態軸；空字串 = 只平移（舊行為）
+    axis_source: str = "depth"          # roll / pitch 的瓶軸來源：depth（深度擬合，量不到用重力）或 gravity
+    orient_tol_deg: float = 1.0         # 姿態誤差都小於這個值才下降
+    max_rot_speed_deg_s: float = 15.0
 
 
 class IbvsAssistStrategy(BaseStrategy):
@@ -95,7 +99,10 @@ class IbvsAssistStrategy(BaseStrategy):
                                     extra_depth_m=cfg.extra_depth_m,
                                     trigger_max_px_from_target=cfg.trigger_max_px,
                                     retreat_up_deg=cfg.retreat_up_deg, center_u=cfg.center_u,
-                                    retreat_min_depth_m=cfg.retreat_min_depth_m)
+                                    retreat_min_depth_m=cfg.retreat_min_depth_m,
+                                    orient_axes=cfg.orient_axes, axis_source=cfg.axis_source,
+                                    orient_tol_deg=cfg.orient_tol_deg,
+                                    max_rot_speed_deg_s=cfg.max_rot_speed_deg_s)
             self._servos[side] = ArmGraspServo(side, ArmModel(side), target, intr, (cam.width, cam.height),
                                                servo_cfg, observe_only=cfg.observe_only)
             self._cams[side] = (cam_name, cam)

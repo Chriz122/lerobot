@@ -291,3 +291,47 @@ def test_center_u_aligns_bottle_to_image_center(setup):
     assert servo.phase == Phase.DESCEND, servo.status()
     box = make_detection(model, q, p_grasp, 0).boxes[0]
     assert abs(box.center[0] - INTR.cx) < 3.0, box.center
+
+
+def rotate_tcp(model, q, rpy_deg, n=60):
+    """TCP 原地轉 rpy_deg（TCP 座標，R = Rz Ry Rx；TCP z = 接近軸，所以第三個值 = roll）。"""
+    r0, p0 = model.fk(q)
+    r_des = r0 @ rpy_to_matrix(rpy_deg)
+    for _ in range(n):
+        r, p = model.fk(q)
+        twist = np.concatenate([0.5 * (r.T @ (p0 - p)), 0.5 * model.orientation_error(q, r_des)])
+        q = q + model.tcp_twist_to_dq(q, twist, damping=1e-3)
+    return q
+
+
+@pytest.mark.parametrize("rpy", [[0.0, 0.0, 12.0], [8.0, 0.0, 0.0], [0.0, 15.0, 0.0], [5.0, -8.0, 10.0]])
+def test_servo_corrects_roll_pitch_yaw(setup, rpy):
+    """ACT 交出的姿態偏 roll / pitch / yaw：伺服時轉回示教的相對姿態，再沿示教路徑夾取。"""
+    model, _, p_grasp, q_teach, target = setup
+    import dataclasses
+    tgt = dataclasses.replace(target, q_teach_deg=model.q_to_deg(q_teach))
+    cfg = ServoConfig(center_u=False, axis_source="gravity")    # 合成相機的深度是整片常數，不能拿來擬合瓶軸
+    servo = ArmGraspServo("left", model, tgt, INTR, WH, cfg)
+    q0 = move_tcp(model, rotate_tcp(model, q_teach, rpy), np.array([0.02, 0.0, 0.0]))
+    q, _, q_desc = run(servo, model, q0, p_grasp, steps=1500)
+    assert servo.phase == Phase.DONE, servo.status()
+    r_desc, p_tcp = model.fk(q_desc)
+    r_teach, _ = model.fk(q_teach)
+    up = np.array([0.0, 0.0, 1.0])
+    # roll / pitch：瓶軸（垂直）在 TCP 座標回到示教時的方向
+    assert np.degrees(np.arccos(np.clip((r_desc.T @ up) @ (r_teach.T @ up), -1, 1))) < 2.0
+    d = tgt.descent_vector / np.linalg.norm(tgt.descent_vector)
+    err = p_tcp - (p_grasp + r_desc @ d * cfg.extra_depth_m)
+    assert np.linalg.norm(err) < 0.008, np.round(err * 1000, 1)
+
+
+def test_orient_axes_empty_keeps_takeover_orientation(setup):
+    """orient_axes="" = 舊行為：全程保持接手當下的姿態，只平移。"""
+    model, _, p_grasp, q_teach, target = setup
+    import dataclasses
+    tgt = dataclasses.replace(target, q_teach_deg=model.q_to_deg(q_teach))
+    servo = ArmGraspServo("left", model, tgt, INTR, WH, ServoConfig(center_u=False, orient_axes=""))
+    q0 = rotate_tcp(model, q_teach, [0.0, 0.0, 6.0])
+    _, _, q_desc = run(servo, model, q0, p_grasp, steps=1500)
+    assert q_desc is not None, servo.status()
+    assert rotation_angle_deg(model.fk(q0)[0].T @ model.fk(q_desc)[0]) < 1.0
