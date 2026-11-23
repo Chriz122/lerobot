@@ -28,7 +28,7 @@ import time
 
 import numpy as np
 
-from openarm_src.grasp.detector import BottleDetector, Detection, box_depth_m
+from openarm_src.grasp.detector import BACKENDS, BottleDetector, Detection, box_depth_m, make_detector
 from openarm_src.grasp.kinematics import (
     ARM_JOINTS,
     ArmModel,
@@ -276,6 +276,9 @@ def main() -> None:
     ap.add_argument("--width", type=int, default=424)
     ap.add_argument("--height", type=int, default=240)
     ap.add_argument("--query", default="bottle", help="OWLv2 查詢文字，例如 'blue bottle'、'cola bottle'")
+    ap.add_argument("--detector", choices=BACKENDS, default="owlv2",
+                    help="偵測器：owlv2 或 yoloe（YOLOE-26-seg）；要與 rollout 的 --strategy.detector 相同")
+    ap.add_argument("--detector-model", default=None, help="偵測器權重（空白 = 預設）")
     ap.add_argument("--retreat", type=float, default=0.10, help="示教位置沿接近軸後退多少 (m)，之後下降實際後退的距離")
     ap.add_argument("--handeye-rpy", type=float, nargs=3, default=list(NOMINAL_HANDEYE_RPY),
                     help="相機相對 TCP 的旋轉 (deg, R = Rz Ry Rx)，預設名義值 -35 0 90（不需校正）")
@@ -293,8 +296,8 @@ def main() -> None:
     approach = np.array(a.approach, dtype=float)
     approach /= np.linalg.norm(approach)
 
-    print("[Teach] 載入 OWLv2 ...")
-    det = BottleDetector({"wrist": a.query})
+    print(f"[Teach] 載入 {a.detector} ...")
+    det = make_detector(a.detector, {"wrist": a.query}, 0.2 if a.detector == "owlv2" else 0.1, a.detector_model)
     arm = Arm(side, port, a.serial or WRIST_SERIAL[side], a.width, a.height)
     try:
         teleop_until_enter(arm, leader_port, "把「張開的夾爪」擺到一閉合就能夾到瓶子的位置")

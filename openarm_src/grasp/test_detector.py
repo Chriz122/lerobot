@@ -1,8 +1,10 @@
-"""merge_duplicate_boxes 的單元測試（不需 GPU / OWLv2）。
+"""偵測後處理的單元測試（不需 GPU / 模型）：merge_duplicate_boxes、遮罩深度（YOLOE-seg）、遮罩跨行程傳送。
 
 執行：PYTHONPATH=$HOME/lerobot pytest openarm_src/grasp/test_detector.py
 """
-from openarm_src.grasp.detector import Box, merge_duplicate_boxes
+import numpy as np
+
+from openarm_src.grasp.detector import Box, Detection, _pack_mask, _unpack_mask, box_depth_m, merge_duplicate_boxes
 
 
 def test_overlapping_duplicates_keep_highest_score():
@@ -58,3 +60,51 @@ def test_separate_bottles_untouched():
     a = Box(10, 20, 70, 230, 0.3)
     b = Box(300, 20, 360, 230, 0.2)
     assert len(merge_duplicate_boxes([a, b])) == 2
+
+
+H, W = 240, 424
+
+
+def _bottle_scene():
+    """瓶子（深度 0.15 m）只佔框的左半，右半是後方桌面（0.40 m），框中央區域兩者各半。"""
+    depth = np.full((H, W), 0.40, np.float32)
+    mask = np.zeros((H, W), bool)
+    mask[40:200, 150:212] = True
+    depth[mask] = 0.15
+    return depth, mask
+
+
+def test_mask_depth_ignores_background():
+    depth, mask = _bottle_scene()
+    det = Detection("wrist_left", 1, 0.0, [], depth, (H, W))
+    plain = Box(150, 40, 274, 200, 0.5)                    # OWLv2：框中央一半是背景
+    seg = Box(150, 40, 274, 200, 0.5, mask=mask)           # YOLOE-seg：只取瓶子像素
+    assert box_depth_m(det, seg) == np.float32(0.15)
+    assert box_depth_m(det, plain) > 0.2                   # 背景混進來，中位數被拉遠
+
+
+def test_mask_depth_falls_back_to_whole_mask():
+    depth, mask = _bottle_scene()
+    det = Detection("wrist_left", 1, 0.0, [], depth, (H, W))
+    off = np.zeros((H, W), bool)
+    off[40:200, 150:160] = True                            # 瓶子像素不在框中央
+    depth[off] = 0.16
+    box = Box(150, 40, 274, 200, 0.5, mask=off)
+    assert box_depth_m(det, box) == np.float32(0.16)
+
+
+def test_merge_keeps_mask_and_specific_label():
+    _, mask = _bottle_scene()
+    generic = Box(150, 40, 274, 200, 0.8, label=1, mask=mask)     # 一般 bottle，分數高，有遮罩
+    specific = Box(152, 42, 272, 198, 0.3, label=0)               # 指定瓶子，同一支
+    out = merge_duplicate_boxes([generic, specific])
+    assert len(out) == 1
+    assert out[0].label == 0 and out[0].score == 0.8
+    assert out[0].mask is mask
+
+
+def test_mask_roundtrip_through_pipe():
+    _, mask = _bottle_scene()
+    assert _unpack_mask(_pack_mask(None)) is None
+    back = _unpack_mask(_pack_mask(mask))
+    assert back.dtype == bool and np.array_equal(back, mask)

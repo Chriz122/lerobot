@@ -6,7 +6,8 @@ ACT 照常推論；某支手臂的腕部相機看到瓶子、而且夠近時，�
 ACT ──(腕部相機連續 3 次看到瓶子)──> [太近就先後退] ──> IBVS 對準 ──> 沿示教路徑下降 ──> 閉合夾爪 ──> 抬高 5 cm ──> 交回 ACT
 ```
 
-- 偵測：OWLv2（`google/owlv2-base-patch16-ensemble`），兩台腕部相機一起推論，RTX 3090 Ti 上約 70 ms。
+- 偵測：OWLv2（`google/owlv2-base-patch16-ensemble`，預設），兩台腕部相機一起推論，RTX 3090 Ti 上約 50 ms。
+  - 或 YOLOE-26-seg（`--strategy.detector=yoloe`）：偵測 + 實例分割，兩台約 25 ms。深度只取遮罩裡的瓶子像素，見下方「偵測器：OWLv2 / YOLOE-26-seg」。
 - 特徵：只用瓶子框中心的 **u** 和 D405 框內**深度 Z**。
   - 左右：預設把瓶子水平置中到**畫面中心** cx（相機在兩指正中間上方，`center_u=true`）；`center_u=false` 才用示教時的 u\*。沿相機 x 軸的水平方向移動。
   - 前後：讓深度等於示教的 Z\*，沿夾爪接近方向的水平分量移動。
@@ -48,6 +49,8 @@ ACT ──(腕部相機連續 3 次看到瓶子)──> [太近就先後退] ─
 | `test_grasp_servo.py` | 離線閉迴路測試：真實 URDF 運動學 + 合成相機 |
 | `test_orientation.py` | 姿態控制的數學測試（瓶軸擬合、對準旋轉），不需 URDF |
 | `fix_teach_handeye.py` | 把舊示教檔的手眼旋轉改成正確的名義值 `-35 0 90`，不用重新示教 |
+| `compare_detectors.py` | 離線比較 OWLv2 與 YOLOE-26-seg：在錄好的腕部影片上跑兩個偵測器，存對照圖與統計 |
+| `test_detector.py` | 偵測後處理的測試（合併重複框、遮罩深度），不需模型 |
 | `lgd_server.py` | （選用，未接上）Grasp-Anything LGD 推論服務，跑在 `lgd` conda 環境 |
 
 ## 使用步驟
@@ -121,6 +124,38 @@ python eval_trials.py \
 - 只傳給 IBVS 回合的參數用 `--ibvs-arg`，例如 `--ibvs-arg=--strategy.arms=left`。
 - 看統計：`python eval_trials.py --summary --log eval_ibvs.csv`。
 
+## 偵測器：OWLv2 / YOLOE-26-seg
+
+`--strategy.detector=yoloe` 改用 [YOLOE-26-seg](https://docs.ultralytics.com/models/yoloe)（Ultralytics，開放詞彙偵測 + 實例分割）。
+
+- 安裝：`pip install ultralytics`（只新增套件，不動 numpy / torch / opencv）。第一次執行會再自動裝 CLIP tokenizer，並把權重（30 MB）與文字編碼器 mobileclip2（240 MB）下載到 `~/models/yoloe/`。
+- 權重：`--strategy.yoloe_model=~/models/yoloe/yoloe-26s-seg.pt`（預設 s；n 更快、m / l 更準）。
+- 深度：只取「框中央區域 ∩ 瓶子遮罩」的像素，背景（托盤、桌面、後方物體）不會混進來。
+- 兩個模型各自固定類別（YOLOE 每個框只給一個類別，「bottle」會搶走「coca cola bottle」；切換類別每次約 140 ms，不能每幀切）：
+  - 指定模型：各相機要找的瓶子（例如 coca cola bottle、blue bottle）。這台相機的瓶子 = label 0（觸發只認這個），別台的 = label 1。
+  - 一般模型：bottle = label 1，近距離看不到標籤時也偵測得到（追蹤靠 3D 鎖定區分是哪一支）。
+- 接手 / 結束的影像會把追蹤中瓶子的遮罩塗綠。
+- 示教與執行用同一個偵測器比較一致：`bottle_teach.py --detector yoloe`。
+
+離線比較（錄好的腕部影片，不需要機器人）：
+
+```bash
+python -m openarm_src.grasp.compare_detectors \
+  --dataset ~/.cache/huggingface/lerobot/JJC489/openarm_bottle_tray \
+  --query-left "blue bottle" --query-right "coca cola bottle"
+```
+
+對照圖存在 `runs/compare_<時間>/`。2026-11-23 在 `openarm_bottle_tray`（左臂看到藍瓶、右臂看到可樂）各取 60 張的結果：
+
+| | OWLv2 | YOLOE-26s-seg |
+|---|---|---|
+| 左（blue bottle）可觸發 / 有框 | 29 / 40 | 24 / 33 |
+| 右（coca cola bottle）可觸發 / 有框 | 9 / 38 | 24 / 44 |
+| 兩台相機一次 | 51.5 ms（19 次/s） | 25.6 ms（39 次/s） |
+
+- 「可觸發」= 有指定瓶子的框且分數 ≥ 0.25；沒有標註，不代表準確率。
+- YOLOE 分數分布較高（看得清楚的瓶子 0.6–0.9，OWLv2 約 0.2–0.5），門檻（`trigger_score` 0.25、`detector_threshold` 0.10）沿用同一組，必要時再調。
+
 ## 每次 rollout 的紀錄（`openarm_src/grasp/runs/<時間>/`）
 
 | 檔案 | 內容 |
@@ -145,6 +180,8 @@ python eval_trials.py \
 |---|---|---|
 | `arms` | `left,right` | 哪些手臂可以接手 |
 | `observe_only` | `false` | 只偵測、不接手 |
+| `detector` | `owlv2` | 偵測器：`owlv2` 或 `yoloe`（YOLOE-26-seg） |
+| `yoloe_model` | `~/models/yoloe/yoloe-26s-seg.pt` | `detector=yoloe` 時的權重 |
 | `detector_threshold` | 0.10 | OWLv2 輸出框的最低分數（追蹤時也用 0.10） |
 | `trigger_score` / `trigger_frames` | 0.25 / 3 | 觸發用的分數門檻與連續次數 |
 | `trigger_max_depth_m` | 0.35 | 瓶子比這個近才接手 |

@@ -39,7 +39,9 @@ class IbvsAssistStrategyConfig(RolloutStrategyConfig):
     arms: str = "left,right"
     teach_dir: str = GRASP_DIR
     observe_only: bool = False          # 只偵測、印出何時會接手，不覆寫任何命令（第一次上機先用這個）
+    detector: str = "owlv2"             # 偵測器：owlv2（預設）或 yoloe（YOLOE-26-seg，偵測 + 分割，深度只取瓶子像素）
     detector_model: str = "google/owlv2-base-patch16-ensemble"
+    yoloe_model: str = "~/models/yoloe/yoloe-26s-seg.pt"   # detector=yoloe 時的權重（n / s / m / l 可換）
     detector_threshold: float = 0.10
     detector_hz: float = 30.0           # 偵測頻率上限；實際受推論時間限制（1 台相機約 28 Hz、2 台約 19 Hz）
     idle_detect_every: int = 3          # 有手臂在接手時，其他閒置手臂的相機每幾拍才送一次偵測（讓接手的手臂偵測更快）
@@ -123,8 +125,11 @@ class IbvsAssistStrategy(BaseStrategy):
             queries[cam_name] = [target.query] if target.query.strip() == "bottle" else [target.query, "bottle"]
             logger.info("[IBVS] %s 手臂啟用：查詢「%s」，s*=(%.0f, %.0f) px、%.1f cm", side, target.query,
                         target.u, target.v, target.depth_m * 100)
-        self._detector = AsyncDetector(queries, cfg.detector_threshold, cfg.detector_model, cfg.detector_hz) \
-            if queries else None
+        model_name = cfg.yoloe_model if cfg.detector == "yoloe" else cfg.detector_model
+        if queries:
+            logger.info("[IBVS] 偵測器：%s（%s）", cfg.detector, model_name)
+        self._detector = AsyncDetector(queries, cfg.detector_threshold, model_name, cfg.detector_hz,
+                                       backend=cfg.detector) if queries else None
         self._overrides: dict[str, float] = {}
 
         # 攔截送往機器人的命令：接手中的手臂改用 IBVS 命令
@@ -291,6 +296,8 @@ class IbvsAssistStrategy(BaseStrategy):
             tracked = servo.tracked
             if det is not None and tracked is not None and tracked[0] == det.frame_id:
                 b = tracked[1]
+                if b.mask is not None and b.mask.shape == img.shape[:2]:      # YOLOE-seg：瓶子像素塗綠
+                    img[b.mask] = (0.5 * img[b.mask] + 0.5 * np.array([0, 255, 0])).astype(np.uint8)
                 cv2.rectangle(img, (int(b.x0), int(b.y0)), (int(b.x1), int(b.y1)), (0, 255, 0), 2)
                 cv2.putText(img, f"{b.score:.2f}", (int(b.x0) + 2, int(b.y0) + 14), cv2.FONT_HERSHEY_SIMPLEX,
                             0.45, (0, 255, 0), 1)

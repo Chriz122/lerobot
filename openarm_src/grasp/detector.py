@@ -1,5 +1,5 @@
 """
-OWLv2 開放詞彙瓶子偵測（腕部相機）。
+開放詞彙瓶子偵測（腕部相機）：OWLv2（預設）或 YOLOE-26-seg（偵測 + 實例分割，`detector=yoloe`）。
 
 AsyncDetector 在「獨立行程」推論：影像前處理與模型 forward 都很吃 Python（GIL），
 放在控制迴圈同一個行程會拖慢 ACT 的 fps。主行程只保留每台相機最新一幀，
@@ -11,13 +11,17 @@ import logging
 import multiprocessing as mp
 import threading
 import time
-from dataclasses import dataclass, field
+import os
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "google/owlv2-base-patch16-ensemble"
+# YOLOE-26-seg：第一次使用時權重（約 30 MB）與文字編碼器 mobileclip2（約 240 MB）會下載到這個資料夾
+DEFAULT_YOLOE_MODEL = "~/models/yoloe/yoloe-26s-seg.pt"
+BACKENDS = ("owlv2", "yoloe")
 
 
 @dataclass
@@ -28,6 +32,7 @@ class Box:
     y1: float
     score: float
     label: int = 0           # 符合第幾個查詢：0 = 指定的瓶子（例如 coca cola bottle），1 = 一般的 bottle
+    mask: np.ndarray | None = field(default=None, repr=False, compare=False)   # YOLOE-seg：瓶子像素（HxW bool）
 
     @property
     def center(self) -> np.ndarray:
@@ -100,9 +105,8 @@ def merge_duplicate_boxes(boxes: list[Box], iou_thr: float = 0.5, contain_thr: f
             # k 的分數 >= b。IoU 重疊或 k 較大：留 k；b 較大（k 是被包住的局部框）且分數不太低：換成 b
             winner = k
             if iou <= iou_thr and a_b > a_k and b.score >= keep_larger_min_ratio * k.score:
-                winner = Box(b.x0, b.y0, b.x1, b.y1, k.score, b.label)
-            label = min(winner.label, b.label, k.label)
-            kept[i] = Box(winner.x0, winner.y0, winner.x1, winner.y1, winner.score, label)
+                winner = replace(b, score=k.score)
+            kept[i] = replace(winner, label=min(winner.label, b.label, k.label))
             merged = True
             break
         if not merged:
@@ -166,10 +170,109 @@ class BottleDetector:
         return boxes
 
 
-def _detector_worker(conn, queries, threshold, model_name):
-    """偵測行程：收 {cam: rgb}，回 {cam: [(x0, y0, x1, y1, score), ...]}。"""
+class YoloeDetector:
+    """YOLOE-26-seg（Ultralytics）開放詞彙偵測 + 實例分割。介面同 BottleDetector，Box.mask = 瓶子像素。
+
+    YOLOE 每個框只給一個類別，所以「指定瓶子」與「一般 bottle」放在同一組類別會互搶：
+    「bottle」分數總是比「coca cola bottle」高，指定瓶子幾乎不會被認出來（錄影上可觸發 4/60）；
+    只放指定瓶子，近距離看不到標籤時又整支瓶子都偵測不到。
+    做法與 OWLv2 的兩個查詢相同：兩個模型各自固定類別（切換類別每次約 140 ms，不能每幀切）：
+      - 指定模型：類別 = 各相機要找的瓶子的聯集（例如 coca cola bottle、blue bottle）
+          這台相機的瓶子 -> label 0（觸發只認這個），別台相機的瓶子 -> label 1
+      - 一般模型：類別 = bottle -> label 1（追蹤時靠 3D 鎖定區分是哪一支）
+    兩組框用 merge_duplicate_boxes 合併：同一支瓶子兩邊都有框時，保留 label 0。
+    """
+
+    def __init__(self, queries: dict[str, str | list[str]], threshold: float = 0.1,
+                 model_name: str = DEFAULT_YOLOE_MODEL, device: str = "cuda"):
+        from ultralytics import YOLOE
+
+        self.queries = {n: ([q] if isinstance(q, str) else list(q)) for n, q in queries.items()}
+        self.target = {n: qs[0] for n, qs in self.queries.items()}        # 每台相機要找的瓶子（第一個查詢）
+        self.classes: list[str] = []
+        for q in self.target.values():
+            if q not in self.classes:
+                self.classes.append(q)
+        generic = sorted({q for qs in self.queries.values() for q in qs[1:]} - set(self.classes))
+        path = os.path.expanduser(model_name)
+        wdir = os.path.dirname(path) or "."
+        os.makedirs(wdir, exist_ok=True)
+        cwd = os.getcwd()
+        os.chdir(wdir)        # Ultralytics 把權重與文字編碼器下載到目前資料夾
+        try:
+            self.model = YOLOE(os.path.basename(path))
+            self.model.set_classes(self.classes, self.model.get_text_pe(self.classes))
+            self.generic = None
+            if generic:
+                self.generic = YOLOE(os.path.basename(path))
+                self.generic.set_classes(generic, self.generic.get_text_pe(generic))
+        finally:
+            os.chdir(cwd)
+        self.threshold = threshold
+        self.device = device
+
+    def _run(self, model, images: list[np.ndarray]):
+        # Ultralytics 把 numpy 影像當 BGR；retina_masks：遮罩與原圖同大小
+        return model.predict([np.ascontiguousarray(im[..., ::-1]) for im in images], conf=self.threshold,
+                             verbose=False, retina_masks=True, device=self.device)
+
+    @staticmethod
+    def _boxes(r, h: int, w: int, label_fn) -> list[Box]:
+        items = []
+        if r.boxes is None or not len(r.boxes):
+            return items
+        xyxy = r.boxes.xyxy.float().cpu().numpy()
+        conf = r.boxes.conf.float().cpu().numpy()
+        cls = r.boxes.cls.int().cpu().numpy()
+        masks = (r.masks.data > 0.5).cpu().numpy() if r.masks is not None else None
+        for i, ((x0, y0, x1, y1), sc, c) in enumerate(zip(xyxy, conf, cls)):
+            x0, x1 = np.clip([x0, x1], 0, w - 1)
+            y0, y1 = np.clip([y0, y1], 0, h - 1)
+            m = masks[i] if masks is not None and masks[i].shape == (h, w) else None
+            if x1 - x0 > 2 and y1 - y0 > 2:
+                items.append(Box(float(x0), float(y0), float(x1), float(y1), float(sc), label_fn(int(c)), m))
+        return items
+
+    def detect(self, images: dict[str, np.ndarray]) -> dict[str, list[Box]]:
+        names = list(images)
+        imgs = [images[n] for n in names]
+        res_t = self._run(self.model, imgs)
+        res_g = self._run(self.generic, imgs) if self.generic is not None else [None] * len(names)
+        boxes = {}
+        for n, img, rt, rg in zip(names, imgs, res_t, res_g):
+            h, w = img.shape[:2]
+            mine = self.classes.index(self.target[n])
+            items = self._boxes(rt, h, w, lambda c, mine=mine: 0 if c == mine else 1)
+            if rg is not None:
+                items += self._boxes(rg, h, w, lambda c: 1)
+            boxes[n] = merge_duplicate_boxes(items)
+        return boxes
+
+
+def make_detector(backend: str, queries: dict[str, str | list[str]], threshold: float, model_name: str | None = None):
+    """backend = "owlv2" 或 "yoloe"；model_name 空白 = 該 backend 的預設模型。"""
+    if backend == "yoloe":
+        return YoloeDetector(queries, threshold, model_name or DEFAULT_YOLOE_MODEL)
+    if backend == "owlv2":
+        return BottleDetector(queries, threshold, model_name or DEFAULT_MODEL)
+    raise ValueError(f"未知的偵測器 {backend!r}（可用：{', '.join(BACKENDS)}）")
+
+
+def _pack_mask(m: np.ndarray | None):
+    return None if m is None else (np.packbits(m), m.shape)
+
+
+def _unpack_mask(p) -> np.ndarray | None:
+    if p is None:
+        return None
+    bits, shape = p
+    return np.unpackbits(bits, count=int(np.prod(shape))).reshape(shape).astype(bool)
+
+
+def _detector_worker(conn, queries, threshold, model_name, backend="owlv2"):
+    """偵測行程：收 {cam: rgb}，回 {cam: [(x0, y0, x1, y1, score, label, 壓縮的遮罩), ...]}。"""
     try:
-        det = BottleDetector(queries, threshold, model_name)
+        det = make_detector(backend, queries, threshold, model_name)
         det.detect({n: np.zeros((240, 424, 3), np.uint8) for n in queries})   # 暖機
         conn.send(("ready", None))
     except Exception as e:  # noqa: BLE001
@@ -184,7 +287,8 @@ def _detector_worker(conn, queries, threshold, model_name):
             return
         try:
             out = det.detect(msg)
-            conn.send(("ok", {n: [(b.x0, b.y0, b.x1, b.y1, b.score, b.label) for b in bs] for n, bs in out.items()}))
+            conn.send(("ok", {n: [(b.x0, b.y0, b.x1, b.y1, b.score, b.label, _pack_mask(b.mask)) for b in bs]
+                              for n, bs in out.items()}))
         except Exception as e:  # noqa: BLE001
             conn.send(("error", repr(e)))
 
@@ -192,23 +296,26 @@ def _detector_worker(conn, queries, threshold, model_name):
 class AsyncDetector:
     """submit() 放最新一幀，latest() 取最新結果；推論在獨立行程，限制 max_hz。"""
 
-    def __init__(self, queries: dict[str, str], threshold: float = 0.15, model_name: str = DEFAULT_MODEL,
-                 max_hz: float = 10.0, startup_timeout_s: float = 120.0):
+    def __init__(self, queries: dict[str, str], threshold: float = 0.15, model_name: str | None = None,
+                 max_hz: float = 10.0, startup_timeout_s: float = 300.0, backend: str = "owlv2"):
+        if backend not in BACKENDS:
+            raise ValueError(f"未知的偵測器 {backend!r}（可用：{', '.join(BACKENDS)}）")
+        self.backend = backend
         ctx = mp.get_context("spawn")
         self._conn, child = ctx.Pipe()
-        self._proc = ctx.Process(target=_detector_worker, args=(child, queries, threshold, model_name),
-                                 daemon=True, name="owlv2-detector")
+        self._proc = ctx.Process(target=_detector_worker, args=(child, queries, threshold, model_name, backend),
+                                 daemon=True, name=f"{backend}-detector")
         self._proc.start()
         t_start = time.perf_counter()
         while not self._conn.poll(0.5):
             if not self._proc.is_alive():
-                raise RuntimeError(f"OWLv2 偵測行程啟動失敗（exit code {self._proc.exitcode}），請看上方錯誤訊息")
+                raise RuntimeError(f"{backend} 偵測行程啟動失敗（exit code {self._proc.exitcode}），請看上方錯誤訊息")
             if time.perf_counter() - t_start > startup_timeout_s:
                 self._proc.terminate()
-                raise RuntimeError("OWLv2 偵測行程啟動逾時")
+                raise RuntimeError(f"{backend} 偵測行程啟動逾時")
         status, info = self._conn.recv()
         if status != "ready":
-            raise RuntimeError(f"OWLv2 偵測行程啟動失敗：{info}")
+            raise RuntimeError(f"{backend} 偵測行程啟動失敗：{info}")
         self.min_period = 1.0 / max_hz
         self._lock = threading.Lock()
         self._pending: dict[str, _Pending] = {}
@@ -217,7 +324,7 @@ class AsyncDetector:
         self._wake = threading.Event()
         self._stop = threading.Event()
         self.latency_ms = 0.0
-        self._thread = threading.Thread(target=self._run, daemon=True, name="owlv2-io")
+        self._thread = threading.Thread(target=self._run, daemon=True, name=f"{backend}-io")
         self._thread.start()
 
     def submit(self, camera: str, rgb: np.ndarray, depth_m: np.ndarray | None) -> None:
@@ -260,20 +367,24 @@ class AsyncDetector:
                 self._conn.send({n: p.rgb for n, p in batch.items()})
                 status, out = self._conn.recv()
             except (EOFError, OSError, BrokenPipeError):
-                logger.error("[IBVS] OWLv2 偵測行程已結束")
+                logger.error("[IBVS] %s 偵測行程已結束", self.backend)
                 return
             if status != "ok":
-                logger.error("[IBVS] OWLv2 偵測失敗：%s", out)
+                logger.error("[IBVS] %s 偵測失敗：%s", self.backend, out)
                 continue
             self.latency_ms = (time.perf_counter() - t0) * 1000.0
             with self._lock:
                 for n, p in batch.items():
-                    boxes = [Box(*b) for b in out.get(n, [])]
+                    boxes = [Box(*b[:6], mask=_unpack_mask(b[6])) for b in out.get(n, [])]
                     self._results[n] = Detection(n, p.frame_id, p.t, boxes, p.depth_m, p.rgb.shape[:2])
 
 
 def box_depth_m(det: Detection, box: Box, frac: float = 0.3) -> float | None:
-    """框中央 frac 比例區域內有效深度的中位數 (m)。"""
+    """框中央 frac 比例區域內有效深度的中位數 (m)。
+
+    有分割遮罩（YOLOE-seg）時只取中央區域裡「瓶子的像素」，背景（桌面、托盤、後方物體）不會混進來；
+    中央區域裡瓶子像素太少（例如框被切到），改用整個遮罩。
+    """
     if det.depth_m is None:
         return None
     c = box.center
@@ -281,6 +392,14 @@ def box_depth_m(det: Detection, box: Box, frac: float = 0.3) -> float | None:
     y0, y1 = int(max(c[1] - hw[1], 0)), int(min(c[1] + hw[1] + 1, det.depth_m.shape[0]))
     x0, x1 = int(max(c[0] - hw[0], 0)), int(min(c[0] + hw[0] + 1, det.depth_m.shape[1]))
     patch = det.depth_m[y0:y1, x0:x1]
+    if box.mask is not None and box.mask.shape == det.depth_m.shape:
+        ok = (patch > 0.03) & (patch < 2.0)
+        sel = patch[ok & box.mask[y0:y1, x0:x1]]
+        if sel.size >= 5:
+            return float(np.median(sel))
+        whole = det.depth_m[box.mask]
+        whole = whole[(whole > 0.03) & (whole < 2.0)]
+        return float(np.median(whole)) if whole.size >= 20 else None
     valid = patch[(patch > 0.03) & (patch < 2.0)]
     if valid.size < max(5, patch.size // 10):
         return None
