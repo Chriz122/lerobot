@@ -6,14 +6,13 @@ import os
 import sys
 import time
 
+import openarm_src.utils.config as config_mod
 from openarm_src.utils.config import (
     ARM_JOINTS,
     DEFAULT_ARDUINO_PORT,
     DEFAULT_FF_SIGN,
     DEFAULT_FORCE_FEEDBACK_LIMIT,
-    DEFAULT_FORCE_FEEDBACK_SCALE,
     DEFAULT_FORCE_MONITOR_ENABLE,
-    DEFAULT_HOME_AT,
     DEFAULT_HOME_PATH,
     DEFAULT_LEADER_SIDE,
     DEFAULT_LEADER_TRACK_ENABLE,
@@ -48,7 +47,7 @@ def _call_arguments(function, args, kwargs):
 
 def bind_force_feedback(robot, teleop) -> None:
     """連接 follower 與 leader：leader._gc.set_feedback_source(follower)"""
-    ff_scale = DEFAULT_FORCE_FEEDBACK_SCALE
+    ff_scale = config_mod.DEFAULT_FORCE_FEEDBACK_SCALE  # 讀執行時的值（--bilateral 會改）
     if ff_scale <= 0:
         return
 
@@ -457,8 +456,12 @@ def install_patches():
 
 
 def patch_record_loop(module):
-    waypoints, duration, guard = load_home_config()
-    when = DEFAULT_HOME_AT  # "record" 或 "reset"
+    when = config_mod.DEFAULT_HOME_AT  # "record"、"reset" 或 "none"（--no-home）
+    if when == "none":
+        logger.info("[gc] 已停用自動回 home（--no-home），錄製前不移動手臂")
+        waypoints, duration, guard = None, 0.0, None
+    else:
+        waypoints, duration, guard = load_home_config()
     profiler = LoopProfiler() if DEFAULT_PROFILE_ENABLE else None
 
     streamer = None
@@ -582,7 +585,11 @@ def patch_rollout(module):
        - 在 DAgger 狀態切換（特別是 PAUSED -> AUTONOMOUS 人類交接回 Policy、PAUSED -> CORRECTING 人類接管）時，
          自動以當前實際關節角度同步基準，徹底杜絕 Policy 首拍或接管時的劇烈甩動/爆衝。
     """
-    waypoints, duration, guard = load_home_config()
+    if config_mod.DEFAULT_HOME_AT == "none":
+        logger.info("[gc] 已停用自動回 home（--no-home），rollout 開始前不移動手臂")
+        waypoints, duration, guard = None, 0.0, None
+    else:
+        waypoints, duration, guard = load_home_config()
     orig = module.build_rollout_context
     track_leader = DEFAULT_LEADER_TRACK_ENABLE
 

@@ -8,7 +8,9 @@ rollout_home.py — 在 lerobot-rollout 開始推論前，先把 OpenArm followe
   - follower disconnect：沿用 openarm_gc 的 park，結束時先慢慢回下垂再關力矩（不會直接掉下來）
 
 用法（放在 ~/lerobot，與 openarm_gc.py、reset.json 同一個資料夾）：
-    python rollout_home.py <與 lerobot-rollout 完全相同的參數>
+    python rollout_home.py [--no-home] <與 lerobot-rollout 完全相同的參數>
+
+    --no-home  連線後不移到起始姿態，從目前姿態直接開始（仍會等你按 Enter 才開始推論）
 
 環境變數：
     OPENARM_HOME       起始姿態檔，預設 reset.json
@@ -36,6 +38,7 @@ from openarm_src.utils.config import DEFAULT_GRIPPER_KP, DEFAULT_GRIPPER_SCALE
 
 HOME_FILE = os.environ.get("OPENARM_HOME", "reset.json")
 SEG_TIME = float(os.environ.get("OPENARM_HOME_TIME", "4"))
+NO_HOME = False  # --no-home：連線後不移到起始姿態
 CTRL_HZ = 30
 GRIPPER_KP_INDEX = 7  # position_kp 依序為 joint_1..joint_7, gripper
 
@@ -144,13 +147,17 @@ def install_patches():
 
     def connect(self, *args, **kwargs):
         orig_connect(self, *args, **kwargs)
-        waypoints = load_waypoints(HOME_FILE)
-        input(f"\n⚠  follower 將移到起始姿態（{HOME_FILE}，{len(waypoints)} 段）。淨空桌面、手放急停旁，按 Enter 開始移動 ...")
-        for i, wp in enumerate(waypoints, 1):
-            print(f"[home] 移動到 waypoint {i}/{len(waypoints)} ...")
-            _move_to(self, wp, SEG_TIME)
-        time.sleep(0.5)
-        input("\n✔ 已在起始姿態。擺好瓶子與托盤後按 Enter 開始推論 ...")
+        if NO_HOME:
+            print("\n[home] --no-home：不移到起始姿態，從目前姿態開始")
+            input("\n擺好瓶子與托盤後按 Enter 開始推論 ...")
+        else:
+            waypoints = load_waypoints(HOME_FILE)
+            input(f"\n⚠  follower 將移到起始姿態（{HOME_FILE}，{len(waypoints)} 段）。淨空桌面、手放急停旁，按 Enter 開始移動 ...")
+            for i, wp in enumerate(waypoints, 1):
+                print(f"[home] 移動到 waypoint {i}/{len(waypoints)} ...")
+                _move_to(self, wp, SEG_TIME)
+            time.sleep(0.5)
+            input("\n✔ 已在起始姿態。擺好瓶子與托盤後按 Enter 開始推論 ...")
         print("[home] 交給模型控制\n")
         _grip_boost_on(self)
         _guard_on(self)
@@ -161,12 +168,16 @@ def install_patches():
 
 
 def main():
+    global NO_HOME
+    args = sys.argv[1:]
+    NO_HOME = any(a in ("--no-home", "-no-home") for a in args)
+    args = [a for a in args if a not in ("--no-home", "-no-home")]  # lerobot-rollout 不認得，先拿掉
     install_patches()
     import openarm_src.grasp.ibvs_assist  # noqa: F401  註冊 --strategy.type=ibvs_assist（ACT + IBVS 夾取）
 
     ep = next(e for e in entry_points(group="console_scripts") if e.name == "lerobot-rollout")
     rollout_main = ep.load()
-    sys.argv = ["lerobot-rollout"] + sys.argv[1:]
+    sys.argv = ["lerobot-rollout"] + args
     sys.exit(rollout_main())
 
 

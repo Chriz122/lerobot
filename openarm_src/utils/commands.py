@@ -258,6 +258,36 @@ def parse_force_monitor_flag(args: list[str]) -> tuple[bool, str | None, list[st
     return monitor_force, arduino_port, cleaned
 
 
+def parse_gc_home_flags(args: list[str]) -> list[str]:
+    """解析並抽離 --gc=true/false 與 --no-home（或 --home-at=record/reset/none）。
+
+    --gc=false：主臂不做重力補償（只剩阻尼），會被重力拉下來，要用手扶著。
+    --no-home：錄製前不把主臂/從臂移到 reset.json 的起始姿態。
+    """
+    cleaned = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg.startswith(("--gc=", "-gc=")):
+            on = arg.split("=", 1)[1].strip().lower() in ("1", "true", "yes", "on")
+            config_mod.DEFAULT_GC_SCALE = config_mod.DEFAULT_GC_SCALE if on else 0.0
+            logger.info("[gc] 主臂重力補償%s（--gc=%s）", "開啟" if on else "關閉", str(on).lower())
+        elif arg in ("--no-gc", "-no-gc"):
+            config_mod.DEFAULT_GC_SCALE = 0.0
+            logger.info("[gc] 主臂重力補償關閉（--no-gc）")
+        elif arg in ("--no-home", "-no-home"):
+            config_mod.DEFAULT_HOME_AT = "none"
+        elif arg.startswith(("--home-at=", "-home-at=")):
+            val = arg.split("=", 1)[1].strip().lower()
+            if val not in ("record", "reset", "none"):
+                raise SystemExit(f"--home-at 只能是 record / reset / none，收到 {val!r}")
+            config_mod.DEFAULT_HOME_AT = val
+        else:
+            cleaned.append(arg)
+        i += 1
+    return cleaned
+
+
 def parse_task_slot_flags(args: list[str]) -> tuple[str | None, list[str]]:
     """從命令列參數中解析並抽離 --task 與 --slots 參數。"""
     cleaned = []
@@ -293,6 +323,8 @@ def run_cli_mode(mode: str, rest: list[str]):
 
     # 解析並抽離 --task / --slots
     task_or_path, rest = parse_task_slot_flags(rest)
+    # 解析並抽離 --gc=false / --no-home
+    rest = parse_gc_home_flags(rest)
 
     # 解析並過濾 --bilateral 參數，避免傳給 LeRobot 引發不認識參數的錯誤
     _, cleaned_rest = parse_bilateral_flag(rest)

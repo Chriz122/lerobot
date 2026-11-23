@@ -5,6 +5,7 @@ import threading
 import time
 import numpy as np
 
+import openarm_src.utils.config as config_mod
 from openarm_src.utils.config import (
     ARM_JOINTS,
     DEFAULT_CONTROL_HZ,
@@ -12,10 +13,8 @@ from openarm_src.utils.config import (
     DEFAULT_FORCE_FEEDBACK_ALPHA,
     DEFAULT_FORCE_FEEDBACK_DEADBAND,
     DEFAULT_FORCE_FEEDBACK_LIMIT,
-    DEFAULT_FORCE_FEEDBACK_SCALE,
     DEFAULT_FRICTION_EPS,
     DEFAULT_FRICTION_SCALE,
-    DEFAULT_GC_SCALE,
     DEFAULT_GC_STATS_ENABLE,
     DEFAULT_KD_SCALE,
     DEFAULT_URDF_PATH,
@@ -44,12 +43,12 @@ class LeaderGC:
         self.leader = leader
         self.bus = leader.bus
         self.gm = GravityModel(DEFAULT_URDF_PATH, side)
-        self.scale = DEFAULT_GC_SCALE
+        self.scale = config_mod.DEFAULT_GC_SCALE  # 讀執行時的值（--gc=false 會改成 0）
         self.kd_scale = DEFAULT_KD_SCALE
         self.fric_scale = DEFAULT_FRICTION_SCALE
         self.fric_eps = DEFAULT_FRICTION_EPS
         # 力回饋參數
-        self.ff_scale = DEFAULT_FORCE_FEEDBACK_SCALE
+        self.ff_scale = config_mod.DEFAULT_FORCE_FEEDBACK_SCALE  # 讀執行時的值（--bilateral 會改）
         self.ff_sign = DEFAULT_FF_SIGN
         self.ff_limit = DEFAULT_FORCE_FEEDBACK_LIMIT
         self.ff_alpha = DEFAULT_FORCE_FEEDBACK_ALPHA

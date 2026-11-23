@@ -42,7 +42,7 @@
 | `OPENARM_URDF` | 字串 | `None` | **(必填)** 雙臂 URDF 模型絕對路徑 (關節名 `openarm_{left,right}_joint1..7`) |
 | `OPENARM_HOME` | 字串 | `openarm_src/reset.json` | 起始姿態 waypoint 檔案路徑；若設為空則略過自動 Homing |
 | `OPENARM_HOME_TIME` | 浮點數 | `4.0` | 移動至起始姿態的總時間 (秒) |
-| `OPENARM_HOME_AT` | 字串 | `"record"` | 觸發 Homing 時機：`"record"` (每集開錄前) 或 `"reset"` (每集結束重置時) |
+| `OPENARM_HOME_AT` | 字串 | `"record"` | 觸發 Homing 時機：`"record"` (每集開錄前)、`"reset"` (每集結束重置時) 或 `"none"` (不回 home，同 `--no-home`) |
 | `OPENARM_TABLE_Z` | 浮點數 | `None` | (選填) 桌面在 URDF 世界座標系之高度 (m)，設定後會自動啟用桌面防撞檢查 |
 | `OPENARM_TABLE_MARGIN` | 浮點數 | `0.05` | 桌面防撞檢查之安全餘裕高度 (m) |
 | `OPENARM_PARK` | 布林值 | `1` (開啟) | 結束退出時是否先平滑回垂下姿態再關閉力矩 (1=開啟, 0=關閉直落) |
@@ -185,6 +185,8 @@ python openarm_gc.py teleoperate \
 
 - **力回饋雙向控制**：附加 `--bilateral=true` 即可啟動夾爪阻力反饋。
 - **壓力感測器即時監控**：附加 `--force-monitor --arduino-port=/dev/ttyACM0` 即可在終端機實時印出 SY40 電壓與力矩。
+- **關掉主臂重力補償**：附加 `--gc=false`（或 `--no-gc`）。主臂只剩阻尼，放手會慢慢掉下來，要用手扶著。`record` / `record-hybrid` / `teleoperate` / `rollout` 都可用。
+- **錄製前不回 home**：附加 `--no-home`（等同 `--home-at=none`），每集開錄前不把主臂/從臂移到 `reset.json` 的起始姿態，直接從目前姿態開始錄。
 
 ---
 
