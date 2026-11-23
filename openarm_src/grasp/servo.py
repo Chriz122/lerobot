@@ -60,7 +60,10 @@ class ServoConfig:
     trigger_max_error_m: float = 0.08          # 接手當下誤差超過這麼大就不接手（多半是太近、框被切到，量測不可信）
     trigger_max_px_from_target: float = 120.0  # 觸發時框中心離 s* 最多幾 px（避免選到別支手臂的瓶子）
     track_score: float = 0.10                  # 追蹤（有位置門檻）時的分數門檻；近距離看不到標籤時分數常只有 0.1 多
-    track_gate_frac: float = 0.15              # 追蹤時新框中心離上一個最多 畫面寬 * frac（避免跳到另一個瓶子）
+    # 鎖定單一瓶子：接手時記下瓶子在基座座標的位置（瓶子不動），之後只接受瓶子點離鎖定位置（水平）這麼近的框，
+    # 其他框（別支瓶子、只框到一部分的雜框）一律不看，不會一幀一幀「跳」到別的東西上。
+    track_gate_m: float = 0.04
+    lock_filter: float = 0.2                   # 每次對上時鎖定位置往新量測靠近的比例（修正手眼 / 深度誤差）
     gain: float = 1.5                          # 1/s
     max_speed_m_s: float = 0.04
     tol_m: float = 0.003
@@ -70,7 +73,7 @@ class ServoConfig:
     servo_timeout_s: float = 15.0
     max_lag_deg: float = 6.0                   # 命令角與實際角差距上限
     descend_speed_m_s: float = 0.02
-    lift_m: float = 0.06
+    lift_m: float = 0.05                       # 交回 ACT 前往上抬多少：夾到後、或中止（跟丟、未收斂）時都會先抬
     lift_speed_m_s: float = 0.02
     extra_depth_m: float = 0.015               # 沿下降方向比示教位置再深入多少（夾得更深、更穩）
     reach_tol_deg: float = 1.0                 # 下降後等實際關節角追到命令這麼近才閉合
@@ -82,7 +85,9 @@ class ServoConfig:
     center_u: bool = True                      # 水平目標用畫面中心（相機在兩指中間上方）；False = 用示教時的 u
     # 姿態控制：要修正哪些軸（逗號分隔 roll,pitch,yaw；空字串 = 只平移，舊行為）。需要示教檔有 q_teach_deg。
     orient_axes: str = "roll,pitch,yaw"
-    axis_source: str = "depth"                 # roll / pitch 的瓶軸來源："depth"（深度擬合，量不到用重力）或 "gravity"
+    # roll / pitch 的瓶軸來源："gravity"（瓶子直立，只用運動學，不需相機校正）或 "depth"（深度擬合圓柱，
+    # 可對歪掉的瓶子，但用到手眼旋轉：角度差 δ 會讓夾爪多轉 δ；真機上很少擬合成功，成功時誤差 5–14°）
+    axis_source: str = "gravity"
     orient_gain: float = 1.0                   # 1/s
     max_rot_speed_deg_s: float = 15.0
     orient_tol_deg: float = 1.0                # 各軸姿態誤差都小於這個值才算收斂、才下降（2° 時模擬殘差約 2–4°）
@@ -147,7 +152,11 @@ class Intrinsics:
 
 
 EDGE_PX = 4
-NOMINAL_CAM_P_TCP = (0.0, -0.04, -0.08)
+# 真機 TCP 座標：x = 夾爪上方（側向夾取時朝上）、y = 兩指張開方向、z = 接近軸。
+# 腕部相機裝在夾爪上方、往下傾約 35°：影像往右 = TCP +y、影像往下 ≈ TCP -x，光軸 = 接近軸往 -x 傾 35°。
+# 注意第三個值 90°：相機 x 軸（影像往右）是 TCP y，不是 TCP x（TCP x 朝上，舊的 -35 0 0 會把左右當成前後）。
+NOMINAL_HANDEYE_RPY = (-35.0, 0.0, 90.0)
+NOMINAL_CAM_P_TCP = (0.04, 0.0, -0.08)
 UP = np.array([0.0, 0.0, 1.0])
 ORIENT_AXES = ("roll", "pitch", "yaw")
 
@@ -267,6 +276,7 @@ class ArmGraspServo:
         self._yaw_star: float | None = None
         self._axis_w: np.ndarray | None = None       # 低通後的瓶軸（基座座標）
         self._last_orient: dict[str, float] = {}
+        self._check_handeye()
         if self._orient_axes and target.q_teach_deg is None:
             logger.warning("[IBVS] %s 示教檔沒有 q_teach_deg：不修正夾爪姿態，只平移（重新示教即可）", side)
             self._orient_axes = []
@@ -284,7 +294,8 @@ class ArmGraspServo:
         self.reason = ""
         self._streak = 0
         self._last_det_id = -1
-        self._last_box_center: np.ndarray | None = None
+        self._lock_w: np.ndarray | None = None       # 鎖定的瓶子點（基座座標，m）
+        self.tracked: tuple[int, Box] | None = None  # (frame_id, 框)：目前追蹤的那一個框（存圖用）
         self._last_good_t = 0.0
         self._v_tcp = np.zeros(3)
         self._w_tcp = np.zeros(3)
@@ -296,8 +307,26 @@ class ArmGraspServo:
         self._moved = 0.0
         self._last_err: float | None = None
         self._clock = 0.0          # 狀態機時間：每次 update 前進 dt（控制週期），與牆鐘無關
+        self._lift_end = Phase.DONE  # 抬高完要進入的狀態：DONE（夾到）或 ABORTED（中止，先抬高再交回）
         self.trace: list[dict] = []   # 接手期間每次偵測的紀錄（診斷用，由策略寫成 CSV）
         self._last_log = -1e9
+
+    def _check_handeye(self) -> None:
+        """示教姿態下，相機 x 軸（影像往右）的水平方向應該和夾爪接近方向接近垂直；否則左右對準會變成前後移動。"""
+        if self.target.q_teach_deg is None:
+            return
+        r_t, _ = self.model.fk(self.model.deg_to_q(self.target.q_teach_deg))
+        x_w, a_w = r_t @ self.target.r_tcp_cam[:, 0], r_t @ self._approach
+        x_h, a_h = x_w - (x_w @ UP) * UP, a_w - (a_w @ UP) * UP
+        if np.linalg.norm(x_h) < 0.5 or np.linalg.norm(a_h) < 0.2:
+            ang = 0.0
+        else:
+            ang = float(np.degrees(np.arccos(abs(x_h @ a_h) / np.linalg.norm(x_h) / np.linalg.norm(a_h))))
+        if ang < 60.0:
+            logger.warning("[IBVS] %s 示教檔的手眼旋轉不對：影像左右方向與夾爪接近方向只差 %.0f°（應接近 90°），"
+                           "左右對準會變成前後移動。請用 --handeye-rpy %s 重新示教，或執行 "
+                           "python -m openarm_src.grasp.fix_teach_handeye", self.side, ang,
+                           " ".join(f"{x:g}" for x in NOMINAL_HANDEYE_RPY))
 
     # ------------------------------------------------------------------ 外部介面
     @property
@@ -363,8 +392,17 @@ class ArmGraspServo:
                 if lag <= self.cfg.reach_tol_deg or now - self._phase_t0 > self.cfg.reach_timeout_s:
                     self._reached = True
                     self._close_t0 = now
+                    # 實際 TCP 比命令少前進多少（沿下降方向）：關節落後幾度，換成夾爪少伸進去幾 mm
+                    r_c, p_c = self.model.fk(self._q_cmd)
+                    d_w = r_c @ (self.target.descent_vector / np.linalg.norm(self.target.descent_vector))
+                    short_mm = float((p_c - self.model.fk(q_obs)[1]) @ d_w) * 1000
+                    j = int(np.argmax(np.abs(self._q_cmd - q_obs)))
+                    msg = (f"[IBVS] {self.side} 下降到底：實際比命令少往前 {short_mm:.0f} mm"
+                           f"（關節最多落後 {lag:.1f}° @ joint_{j + 1}），閉合夾爪")
                     if lag > self.cfg.reach_tol_deg:
-                        logger.warning("[IBVS] %s 下降後手臂仍落後命令 %.1f 度，照樣閉合", self.side, lag)
+                        logger.warning(msg + f"｜夾太淺可加 --strategy.extra_depth_{self.side}_m")
+                    else:
+                        logger.info(msg)
                 return self._command()
             self._grip_cmd = min(self._grip_cmd + self.cfg.gripper_speed_deg_s * dt, self.cfg.gripper_closed_deg)
             if self._grip_cmd >= self.cfg.gripper_closed_deg and now - self._close_t0 > self.cfg.close_hold_s + 1.0:
@@ -372,9 +410,12 @@ class ArmGraspServo:
         elif self.phase == Phase.LIFT:
             r_tcp, _ = self.model.fk(self._q_cmd)
             up_tcp = r_tcp.T @ np.array([0.0, 0.0, 1.0])       # 基座 +z 換到 TCP 座標
-            self._move_tcp(up_tcp, self.cfg.lift_speed_m_s, self.cfg.lift_m, dt, Phase.DONE, now)
+            self._move_tcp(up_tcp, self.cfg.lift_speed_m_s, self.cfg.lift_m, dt, self._lift_end, now)
             if self.phase == Phase.DONE:
-                logger.info("[IBVS] %s 夾取並提起完成，交回 ACT", self.side)
+                logger.info("[IBVS] %s 夾取並抬高 %.0f cm 完成，交回 ACT", self.side, self.cfg.lift_m * 100)
+                return None
+            if self.phase == Phase.ABORTED:
+                logger.info("[IBVS] %s 已抬高 %.0f cm，交回 ACT", self.side, self.cfg.lift_m * 100)
                 return None
         return self._command() if self.active else None
 
@@ -396,9 +437,20 @@ class ArmGraspServo:
         if phase == Phase.SERVO:
             self._axis_w = None
 
+    @property
+    def aborting(self) -> bool:
+        """已中止、正在抬高（抬完才交回 ACT）。"""
+        return self.phase == Phase.LIFT and self._lift_end == Phase.ABORTED
+
     def _abort(self, reason: str) -> None:
-        self.phase = Phase.ABORTED
+        """中止：夾爪維持目前開合，先往上抬 lift_m 再交回 ACT（不讓 ACT 從貼著瓶子的位置接手）。"""
         self.reason = reason
+        if self.active and self._q_cmd is not None and self.cfg.lift_m > 0:
+            logger.warning("[IBVS] %s 中止：%s，先抬高 %.0f cm 再交回 ACT", self.side, reason, self.cfg.lift_m * 100)
+            self._lift_end = Phase.ABORTED
+            self._enter(Phase.LIFT, self._clock)
+            return
+        self.phase = Phase.ABORTED
         logger.warning("[IBVS] %s 中止：%s，交回 ACT", self.side, reason)
 
     def _candidates(self, det: Detection, min_score: float, specific_only: bool = False) -> list[tuple[Box, float]]:
@@ -418,6 +470,31 @@ class ArmGraspServo:
     def _center_inside(self, b: Box) -> bool:
         c = b.center
         return EDGE_PX < c[0] < self.image_w - 1 - EDGE_PX and EDGE_PX < c[1] < self.image_h - 1 - EDGE_PX
+
+    def _box_point_w(self, c: np.ndarray, z: float, q: np.ndarray) -> np.ndarray:
+        """框中心 + 框內深度 -> 瓶子表面點（基座座標）。"""
+        r_t, p_t = self.model.fk(q)
+        return p_t + r_t @ bottle_in_tcp(self.intr, self.target.r_tcp_cam, self.target.cam_p_tcp, c[0], c[1], z)
+
+    def _pick_locked(self, det: Detection, cands: list[tuple[Box, float]], q: np.ndarray,
+                     gate_m: float) -> tuple[tuple[Box, float, np.ndarray] | None, float | None]:
+        """從候選框裡只挑「鎖定的那支瓶子」：瓶子點離鎖定位置（水平）最近，且在 gate_m 以內。
+
+        回傳 ((框, 深度, 框中心) 或 None, 最近的距離 m)。對上時鎖定位置稍微往新量測靠近。
+        直立瓶子表面任何一點的水平位置都差不多，所以框被畫面上下切到、框中心上下移動都不影響。
+        """
+        best, best_d, best_p = None, None, None
+        for b, z in cands:
+            c = self._feature(b)
+            p = self._box_point_w(c, z, q)
+            d = float(np.linalg.norm((p - self._lock_w)[:2]))
+            if best_d is None or d < best_d:
+                best, best_d, best_p = (b, z, c), d, p
+        if best is None or best_d > gate_m:
+            return None, best_d
+        self._lock_w = self._lock_w + self.cfg.lock_filter * (best_p - self._lock_w)
+        self.tracked = (det.frame_id, best[0])
+        return best, best_d
 
     def position_error(self, c: np.ndarray, z: float, q: np.ndarray) -> np.ndarray:
         """TCP 要移動的量（基座座標，m），只用框中心的 u 與深度 Z：
@@ -521,7 +598,12 @@ class ArmGraspServo:
             self._streak = 0
             return None
         best = min(cands, key=lambda bz: np.linalg.norm(self._feature(bz[0]) - star))
-        self._last_box_center = self._feature(best[0])
+        p_w = self._box_point_w(self._feature(best[0]), best[1], self._q_obs)
+        if self._streak and self._lock_w is not None and \
+                np.linalg.norm((p_w - self._lock_w)[:2]) > cfg.track_gate_m:
+            self._streak = 0                  # 連續幾次看到的不是同一支瓶子：重新計數
+        self._lock_w = p_w
+        self.tracked = (det.frame_id, best[0])
         self._streak += 1
         if self._streak < cfg.trigger_frames:
             return None
@@ -562,12 +644,12 @@ class ArmGraspServo:
                                **dict(zip(("tcp_x", "tcp_y", "tcp_z"),
                                           np.round(self.model.fk(self._q_obs if self._q_obs is not None
                                                                  else self._q_cmd)[1], 4).tolist()))})
-            seen = [(self._feature(b), z) for b, z in cands
-                    if z >= cfg.retreat_min_depth_m and self._center_inside(b)]
-            if seen:
-                c, z = min(seen, key=lambda cz: np.linalg.norm(cz[0] - self._last_box_center)
-                           if self._last_box_center is not None else 0.0)
-                self._last_box_center = c
+            # 太近時接手量到的鎖定位置較不準：門檻放寬一倍
+            seen = [(b, z) for b, z in cands if z >= cfg.retreat_min_depth_m and self._center_inside(b)]
+            q_img = self._q_obs if self._q_obs is not None else self._q_cmd
+            pick, _ = self._pick_locked(det, seen, q_img, 2.0 * cfg.track_gate_m)
+            if pick is not None:
+                z = pick[1]
                 self._seen += 1
                 if self._seen >= cfg.retreat_seen_frames:
                     logger.info("[IBVS] %s 後退 %.1f cm 後看得到瓶子（深度 %.1f cm），開始伺服",
@@ -592,26 +674,21 @@ class ArmGraspServo:
             return self._abort(f"{cfg.servo_timeout_s:.0f} 秒內未收斂")
         self._open_gripper(dt)
         if det is not None:
-            gate = cfg.track_gate_frac * self.image_w
+            q_img = self._q_obs if self._q_obs is not None else self._q_cmd
             scored = [b for b in det.boxes if b.score >= cfg.track_score]
-            near = [(self._feature(b), z, b) for b, z in self._candidates(det, cfg.track_score)]
-            n_depth = len(near)
-            near = [(c, z, b) for c, z, b in near
-                    if self._last_box_center is None or np.linalg.norm(c - self._last_box_center) <= gate]
+            cands = self._candidates(det, cfg.track_score)
+            pick, lock_d = self._pick_locked(det, cands, q_img, cfg.track_gate_m)
             rec = {"t": round(now, 3), "frame": det.frame_id, "n_boxes": len(det.boxes),
                    "best_score": round(max((b.score for b in det.boxes), default=0.0), 3),
-                   "n_scored": len(scored), "n_with_depth": n_depth, "n_in_gate": len(near),
+                   "n_scored": len(scored), "n_with_depth": len(cands), "locked": int(pick is not None),
+                   "lock_d_mm": None if lock_d is None else round(lock_d * 1000, 1),
                    "depth_valid_frac": round(float((det.depth_m > 0.03).mean()), 3) if det.depth_m is not None else -1,
-                   "tcp_z": round(float(self.model.fk(self._q_obs if self._q_obs is not None else self._q_cmd)[1][2]), 4),
-                   "last_u": None if self._last_box_center is None else round(float(self._last_box_center[0]), 1),
-                   "last_v": None if self._last_box_center is None else round(float(self._last_box_center[1]), 1)}
+                   "tcp_z": round(float(self.model.fk(q_img)[1][2]), 4),
+                   **dict(zip(("lock_x", "lock_y", "lock_z"), np.round(self._lock_w, 4).tolist()))}
             self.trace.append(rec)
-            if near:
-                c, z, box = min(near, key=lambda czb: np.linalg.norm(czb[0] - self._last_box_center)
-                                if self._last_box_center is not None else 0.0)
-                self._last_box_center = c
+            if pick is not None:
+                box, z, c = pick
                 self._last_good_t = now
-                q_img = self._q_obs if self._q_obs is not None else self._q_cmd
                 err = self.position_error(c, z, q_img)
                 self._last_err = float(np.linalg.norm(err))
                 rec.update(u=round(float(c[0]), 1), v=round(float(c[1]), 1), z=round(z, 4),
@@ -654,8 +731,9 @@ class ArmGraspServo:
                 self._v_tcp_t = now
             elif now - self._last_log >= 0.5:
                 self._last_log = now
-                logger.info("[IBVS] %s 伺服：這幀沒有可用的瓶子（框 %d 個、分數夠 %d、有深度 %d、在追蹤範圍內 0）",
-                            self.side, len(det.boxes), len(scored), n_depth)
+                far = "" if lock_d is None else f"，最近的框離鎖定的瓶子 {lock_d * 100:.1f} cm > {cfg.track_gate_m * 100:.0f} cm"
+                logger.info("[IBVS] %s 伺服：這幀沒有鎖定的瓶子（框 %d 個、分數夠 %d、有深度 %d%s）",
+                            self.side, len(det.boxes), len(scored), len(cands), far)
         if now - self._last_good_t > cfg.lost_timeout_s:
             return self._abort("瓶子跟丟")
         if now - self._v_tcp_t > cfg.hold_if_stale_s:

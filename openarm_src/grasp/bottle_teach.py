@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-bottle_teach.py — 為一支手臂示教瓶子夾取目標，並量測腕部相機的手眼旋轉。產生 teach_<side>.json。
+bottle_teach.py — 為一支手臂示教瓶子夾取目標。產生 teach_<side>.json。
 
 流程：
   1. 從臂連線（腕部 D405 開彩色 + 深度），主臂連線開主從控制
   2. 用主臂把「張開的夾爪」擺到「一閉合就能夾到瓶子」的位置，按 Enter
   3. 沿夾爪接近軸後退 --retreat，用 OWLv2 + 深度記錄瓶子位置與 TCP 高度；下降距離用 FK 量到的實際後退量
-  4. 看得到完整瓶子處（必要時自動再退），TCP 沿 x / y / z 各前後移動 --calib-step，解出相機相對 TCP 的旋轉
-     （或用 --handeye-rpy -35 0 0 直接指定）
+  4. 手眼旋轉：預設直接用名義值 --handeye-rpy -35 0 90（相機在夾爪上方往下傾約 35°；影像往右 = TCP +y），不需要校正。
+     伺服的目標是「示教時相機看到的樣子」，手眼角度不準會在示教與執行之間抵銷（模擬中假設 0°～-45° 夾取誤差都 < 3 mm）。
+     加 --measure-handeye 才會實際量測（TCP 沿 x / y / z 各前後移動 --calib-step）。
   5. 存檔；結束時從臂慢慢回下垂再關力矩
 
 用法（在 ~/lerobot，conda activate lerobot）：
@@ -36,7 +37,7 @@ from openarm_src.grasp.kinematics import (
     rotation_angle_deg,
     rpy_to_matrix,
 )
-from openarm_src.grasp.servo import NOMINAL_CAM_P_TCP, Intrinsics, TaughtTarget, bottle_in_tcp
+from openarm_src.grasp.servo import NOMINAL_CAM_P_TCP, NOMINAL_HANDEYE_RPY, Intrinsics, TaughtTarget, bottle_in_tcp
 from openarm_src.utils import config as oa
 
 WRIST_SERIAL = {"left": "353322271140", "right": "353322271542"}
@@ -227,7 +228,7 @@ def calibrate(arm: Arm, det: BottleDetector, approach: np.ndarray, step: float):
         if extra >= 0.15:
             path = save_debug(arm, det, "calib")
             sys.exit(f"[Teach] 再退 {extra * 100:.0f} cm 仍看不到完整的瓶子（標註圖：{path}），無法量測手眼旋轉。"
-                     "可改用 --handeye-rpy 直接指定（例如相機約傾斜 35 度：--handeye-rpy -35 0 0）")
+                     "可改用名義值（不加 --measure-handeye，預設 --handeye-rpy -35 0 90）")
         arm.move_tcp(-approach * 0.02)
         extra += 0.02
     if extra:
@@ -255,7 +256,7 @@ def calibrate(arm: Arm, det: BottleDetector, approach: np.ndarray, step: float):
                   f"（TCP 轉了 {rotation_angle_deg(r0.T @ r1):.1f} 度）")
     if len(pairs) < 3 or np.linalg.matrix_rank(np.array([p[0] for p in pairs]), tol=step * 0.3) < 2:
         sys.exit(f"[Teach] 有效樣本只有 {len(pairs)} 筆（需要至少 3 筆、兩個以上方向），無法量測手眼旋轉。"
-                 "可改用 --handeye-rpy 直接指定，例如 --handeye-rpy -35 0 0")
+                 "可改用名義值（不加 --measure-handeye，預設 --handeye-rpy -35 0 90）")
     A = np.array([p[0] for p in pairs])
     B = np.array([p[1] for p in pairs])
     q = kabsch(A, B)
@@ -267,7 +268,7 @@ def calibrate(arm: Arm, det: BottleDetector, approach: np.ndarray, step: float):
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="示教瓶子夾取目標並量測手眼旋轉")
+    ap = argparse.ArgumentParser(description="示教瓶子夾取目標")
     ap.add_argument("--side", choices=["left", "right"], required=True)
     ap.add_argument("--port", default=None)
     ap.add_argument("--leader-port", default=None)
@@ -276,8 +277,10 @@ def main() -> None:
     ap.add_argument("--height", type=int, default=240)
     ap.add_argument("--query", default="bottle", help="OWLv2 查詢文字，例如 'blue bottle'、'cola bottle'")
     ap.add_argument("--retreat", type=float, default=0.10, help="示教位置沿接近軸後退多少 (m)，之後下降實際後退的距離")
-    ap.add_argument("--handeye-rpy", type=float, nargs=3, default=None,
-                    help="直接指定相機相對 TCP 的旋轉 (deg, roll pitch yaw)，略過量測；例如 -35 0 0")
+    ap.add_argument("--handeye-rpy", type=float, nargs=3, default=list(NOMINAL_HANDEYE_RPY),
+                    help="相機相對 TCP 的旋轉 (deg, R = Rz Ry Rx)，預設名義值 -35 0 90（不需校正）")
+    ap.add_argument("--measure-handeye", action="store_true",
+                    help="實際量測手眼旋轉（TCP 沿 x/y/z 各移動），取代 --handeye-rpy；一般不需要")
     ap.add_argument("--calib-step", type=float, default=0.015, help="手眼量測時每次移動距離 (m)")
     ap.add_argument("--approach", type=float, nargs=3, default=[0.0, 0.0, 1.0], help="TCP 座標中夾爪前進方向")
     ap.add_argument("--out", default=None, help="輸出檔（預設 openarm_src/grasp/teach_<side>.json）")
@@ -322,14 +325,14 @@ def main() -> None:
                   "但請確認這條路徑不會撞到瓶子。")
         descent_tcp = r_t.T @ (p_g - p_t)            # 示教位置 -> 夾取位姿，示教位置的 TCP 座標
 
-        if a.handeye_rpy is not None:
-            r = rpy_to_matrix(a.handeye_rpy)
-            meta = {"handeye_source": "manual"}
-            print(f"[Teach] 使用 --handeye-rpy {a.handeye_rpy}，略過手眼量測")
-        else:
+        if a.measure_handeye:
             r, meta = calibrate(arm, det, approach, a.calib_step)
             print("[Teach] 回到示教位置 ...")
             arm.move_joints(q_teach)
+        else:
+            r = rpy_to_matrix(a.handeye_rpy)
+            meta = {"handeye_source": "manual"}
+            print(f"[Teach] 手眼旋轉用名義值 {a.handeye_rpy}（不需校正）")
         tilt = float(np.degrees(np.arccos(np.clip(r[:, 2] @ approach, -1, 1))))
         print(f"[Teach] 手眼旋轉 rpy = {np.round(matrix_to_rpy(r), 1)} deg；相機光軸與接近軸夾 {tilt:.0f} 度")
 

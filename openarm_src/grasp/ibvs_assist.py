@@ -49,18 +49,25 @@ class IbvsAssistStrategyConfig(RolloutStrategyConfig):
     min_policy_time_s: float = 1.0      # rollout 開始後至少這麼久才允許接手
     gain: float = 1.5
     max_speed_m_s: float = 0.04
-    lift_m: float = 0.06
+    lift_m: float = 0.05                # 交回 ACT 前往上抬多少（夾到後、中止時都會抬）
     center_u: bool = True               # 瓶子水平置中到畫面中心；false = 對準示教時瓶子所在的 u
     extra_depth_m: float = 0.015        # 比示教位置再往前深入多少才閉合（夾太淺會滑掉）
+    extra_depth_left_m: float | None = None   # 只給左臂的 extra_depth_m（空白 = 用 extra_depth_m）
+    extra_depth_right_m: float | None = None  # 只給右臂的 extra_depth_m
     retreat_up_deg: float = 35.0        # 太近時往後上方退的仰角
     retreat_min_depth_m: float = 0.07   # 太近時：深度 < 這個值或看不到瓶子才繼續後退
     trigger_max_px: float = 120.0       # 觸發時瓶子框中心離 s* 最多幾 px（畫面裡有別支手臂的瓶子時很重要）
+    track_gate_m: float = 0.04          # 接手後只追鎖定的那支瓶子：框的瓶子點離鎖定位置（水平）最多幾 m
     query_left: str = ""                # 左臂要找的瓶子（空白 = 用示教檔的 query），例如 "coca cola bottle"
     query_right: str = ""               # 右臂要找的瓶子，例如 "blue bottle"
     orient_axes: str = "roll,pitch,yaw"  # 伺服時修正哪些姿態軸；空字串 = 只平移（舊行為）
-    axis_source: str = "depth"          # roll / pitch 的瓶軸來源：depth（深度擬合，量不到用重力）或 gravity
+    axis_source: str = "gravity"        # roll / pitch 的瓶軸來源：gravity（瓶子直立，不需相機校正）或 depth（深度擬合）
     orient_tol_deg: float = 1.0         # 姿態誤差都小於這個值才下降
     max_rot_speed_deg_s: float = 15.0
+    # 交回 ACT 時 ACT 第一拍常和目前姿態差 10° 以上：該手臂的 step_guard 每拍上限從 handback_start_step_deg
+    # 漸增回原本的上限（OPENARM_MAX_STEP_DEG，預設 4°），歷時 handback_ramp_s 秒。0 = 不額外限速
+    handback_ramp_s: float = 2.0
+    handback_start_step_deg: float = 0.3
 
 
 class IbvsAssistStrategy(BaseStrategy):
@@ -73,7 +80,9 @@ class IbvsAssistStrategy(BaseStrategy):
         cfg: IbvsAssistStrategyConfig = self.config
         self._attach_log_file()
         robot = ctx.hardware.robot_wrapper.inner
+        self._robot = robot
         self._servos: dict[str, ArmGraspServo] = {}
+        self._abort_saved: set[str] = set()   # 已存過中止影像的手臂
         self._cams = {}
         self._depth_scale = {}
         queries = {}
@@ -96,8 +105,10 @@ class IbvsAssistStrategy(BaseStrategy):
             servo_cfg = ServoConfig(trigger_score=cfg.trigger_score, trigger_frames=cfg.trigger_frames,
                                     trigger_max_depth_m=cfg.trigger_max_depth_m, gain=cfg.gain,
                                     max_speed_m_s=cfg.max_speed_m_s, lift_m=cfg.lift_m,
-                                    extra_depth_m=cfg.extra_depth_m,
+                                    extra_depth_m=(cfg.extra_depth_m if getattr(cfg, f"extra_depth_{side}_m") is None
+                                                   else getattr(cfg, f"extra_depth_{side}_m")),
                                     trigger_max_px_from_target=cfg.trigger_max_px,
+                                    track_gate_m=cfg.track_gate_m,
                                     retreat_up_deg=cfg.retreat_up_deg, center_u=cfg.center_u,
                                     retreat_min_depth_m=cfg.retreat_min_depth_m,
                                     orient_axes=cfg.orient_axes, axis_source=cfg.axis_source,
@@ -105,6 +116,7 @@ class IbvsAssistStrategy(BaseStrategy):
                                     max_rot_speed_deg_s=cfg.max_rot_speed_deg_s)
             self._servos[side] = ArmGraspServo(side, ArmModel(side), target, intr, (cam.width, cam.height),
                                                servo_cfg, observe_only=cfg.observe_only)
+            logger.info("[IBVS] %s 比示教位置再往前 %.1f cm 才閉合", side, servo_cfg.extra_depth_m * 100)
             self._cams[side] = (cam_name, cam)
             self._depth_scale[side] = scale
             # 觸發用指定的瓶子；追蹤時也接受一般的 bottle（近距離看不到標籤時，指定查詢常常認不出來）
@@ -226,15 +238,31 @@ class IbvsAssistStrategy(BaseStrategy):
                 overrides.update(cmd)
             if not was_active and servo.active:
                 self._save_snapshot(side, rgb, det, "takeover")
+            if servo.aborting and side not in self._abort_saved:
+                self._abort_saved.add(side)              # 中止當下的影像（抬高之前），看得出為什麼跟丟
+                self._save_snapshot(side, rgb, det, "aborted")
             if was_active and not servo.active:
                 handback = True
-                self._save_snapshot(side, rgb, det, servo.phase.value)
+                self._soften_handback(side)
+                if not (servo.phase.value == "aborted" and side in self._abort_saved):
+                    self._save_snapshot(side, rgb, det, servo.phase.value)
                 self._save_trace(side, servo)
         if handback:
             # 交回 ACT：清掉接手前規劃的動作，讓 ACT 從目前姿態重新推論
             engine.reset()
             interpolator.reset()
         return overrides
+
+    def _soften_handback(self, side: str) -> None:
+        """交回 ACT：這支手臂的 step_guard 暫時更嚴格，避免 ACT 第一拍大跳動。"""
+        if self.config.handback_ramp_s <= 0:
+            return
+        guard = getattr(getattr(self, "_robot", None), "_step_guard", None)
+        if guard is None:
+            logger.warning("[IBVS] %s 交回 ACT：沒有 step_guard（不是用 rollout_home.py 啟動，或 OPENARM_STEP_GUARD=0），"
+                           "無法限速", side)
+            return
+        guard.soften(f"{side}_", self.config.handback_ramp_s, self.config.handback_start_step_deg)
 
     def _attach_log_file(self) -> None:
         """整次 rollout 的 log（含所有 [IBVS] 訊息）另存一份到 runs/<時間>/ibvs.log。"""
@@ -252,7 +280,7 @@ class IbvsAssistStrategy(BaseStrategy):
         return self._run_path
 
     def _save_snapshot(self, side: str, rgb, det, tag: str) -> None:
-        """接手、中止、完成時存下腕部影像與偵測框（綠 = 分數夠，灰 = 分數不夠）。"""
+        """接手、中止、完成時存下腕部影像，只畫夾爪在追蹤的那一個框（鎖定的瓶子）。"""
         if rgb is None:
             return
         try:
@@ -260,12 +288,15 @@ class IbvsAssistStrategy(BaseStrategy):
 
             img = cv2.cvtColor(np.asarray(rgb), cv2.COLOR_RGB2BGR)
             servo = self._servos[side]
-            if det is not None:
-                for b in det.boxes:
-                    col = (0, 255, 0) if b.score >= servo.cfg.track_score else (160, 160, 160)
-                    cv2.rectangle(img, (int(b.x0), int(b.y0)), (int(b.x1), int(b.y1)), col, 2)
-                    cv2.putText(img, f"{b.score:.2f}", (int(b.x0) + 2, int(b.y0) + 14), cv2.FONT_HERSHEY_SIMPLEX,
-                                0.45, col, 1)
+            tracked = servo.tracked
+            if det is not None and tracked is not None and tracked[0] == det.frame_id:
+                b = tracked[1]
+                cv2.rectangle(img, (int(b.x0), int(b.y0)), (int(b.x1), int(b.y1)), (0, 255, 0), 2)
+                cv2.putText(img, f"{b.score:.2f}", (int(b.x0) + 2, int(b.y0) + 14), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.45, (0, 255, 0), 1)
+            else:
+                cv2.putText(img, "locked bottle not detected in this frame", (6, 16), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.45, (0, 0, 255), 1)
             cv2.drawMarker(img, (int(servo.u_star), int(servo.v_star)), (0, 0, 255), cv2.MARKER_CROSS, 16, 2)
             cv2.putText(img, f"{side} {tag} {servo.reason}", (6, img.shape[0] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
                         (0, 0, 255), 1)

@@ -44,6 +44,35 @@ class StepJumpGuard:
 
         self.last_action: dict[str, float] = {}
         self._last_warn_time: dict[str, float] = {}
+        # 交接後的漸進限速：{鍵名前綴: (開始時間, 持續秒數, 起始每拍上限)}
+        self._soft: dict[str, tuple[float, float, float]] = {}
+
+    def soften(self, prefix: str, duration_s: float = 2.0, start_step_deg: float = 0.3) -> None:
+        """接下來 duration_s 秒，鍵名以 prefix 開頭的關節（例如 "left_"）改用更嚴格的每拍上限：
+        從 start_step_deg 依時間平方漸增回 max_step_deg（夾爪依同樣比例）。
+
+        用在控制權交接（IBVS 交回 ACT）：新控制者第一拍常和目前姿態差 10° 以上，
+        固定上限只能把它變成「以最大速度衝過去」；漸進上限讓手臂從慢到快啟動。
+        """
+        if not self.enabled or duration_s <= 0:
+            return
+        start = min(float(start_step_deg), self.max_step_deg)
+        self._soft[prefix] = (time.monotonic(), float(duration_s), start)
+        logger.info(f"[step_guard] {prefix.rstrip('_')} 交接：接下來 {duration_s:g} 秒每拍上限從 {start:g}° "
+                    f"漸增回 {self.max_step_deg:g}°")
+
+    def _limit(self, key: str, now: float) -> float:
+        base = self.max_step_gripper if "gripper" in key else self.max_step_deg
+        for prefix, (t0, dur, start) in list(self._soft.items()):
+            if not key.startswith(prefix):
+                continue
+            f = (now - t0) / dur
+            if f >= 1.0:
+                del self._soft[prefix]
+                continue
+            lo = start * base / self.max_step_deg          # 夾爪用同樣比例
+            return lo + (base - lo) * f * f
+        return base
 
     def sync_from_observation(self, obs: dict[str, Any]) -> None:
         """從當前機器人觀測值 (真實關節角度) 同步基準。
@@ -89,7 +118,8 @@ class StepJumpGuard:
 
             if k in self.last_action:
                 prev_v = self.last_action[k]
-                limit = self.max_step_gripper if "gripper" in k else self.max_step_deg
+                limit = self._limit(k, now)
+                soft = limit < (self.max_step_gripper if "gripper" in k else self.max_step_deg)
                 delta = v_float - prev_v
                 if abs(delta) > limit:
                     # 進行步長箝制
@@ -97,7 +127,7 @@ class StepJumpGuard:
                     clamped_action[k] = clamped_v
 
                     # 節流告警記錄 (每個關節最多每 STEP_GUARD_WARN_THROTTLE_S 秒印一次，避免洗版)
-                    if now - self._last_warn_time.get(k, 0) > STEP_GUARD_WARN_THROTTLE_S:
+                    if not soft and now - self._last_warn_time.get(k, 0) > STEP_GUARD_WARN_THROTTLE_S:
                         logger.warning(
                             f"[step_guard] [警告] 抑制關節步長跳變 ({k}): 目標 delta={delta:+.1f}° > 限制 {limit:.1f}°，"
                             f"已平滑限制為 {clamped_v:.1f}°"
